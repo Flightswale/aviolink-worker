@@ -1,0 +1,19 @@
+{
+  "name": "flightalert-worker",
+  "version": "1.2.0",
+  "private": true,
+  "description": "FlightAlert cloud worker: mailbox -> parse -> Supabase -> delivery",
+  "main": "worker/worker-cloud.js",
+  "scripts": {
+    "start": "node worker/worker-cloud.js",
+    "test": "node test/run.js"
+  },
+  "engines": { "node": "22.x" },
+  "packageManager": "npm@10.9.0",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "imapflow": "^1.0.164",
+    "nodemailer": "^6.9.14",
+    "pdf-parse": "^1.1.1"
+  }
+}

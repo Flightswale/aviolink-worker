@@ -1,0 +1,559 @@
+"use strict";
+/**
+ * FlightAlert Cloud Worker v2 (Phase B: multi-tenant trials)
+ * ----------------------------------------------------------
+ * New vs v1:
+ *  - AGENCY ROUTING: every incoming mail is matched to the agency whose mailbox
+ *    forwarded it (X-Forwarded-For / Delivered-To / From headers vs agencies.forward_sources).
+ *    Unmatched mail falls back to the default agency (AGENCY_SLUG, Finch).
+ *  - PER-AGENCY DELIVERY: schedule-change alerts are emailed, fully formatted,
+ *    to that agency's notify_email (their trial product experience).
+ *  - Admin Telegram still receives every card, tagged with the agency name.
+ *  - Trial expiry respected: expired trials are logged, not delivered.
+ * Env additions: none required. Optional: ANTHROPIC_MODEL.
+ */
+
+const path = require("path");
+const fs = require("fs");
+const { ImapFlow } = require("imapflow");
+const nodemailer = require("nodemailer");
+const { createClient } = require("@supabase/supabase-js");
+const { parseEmail, splitEmail, helpers } = require("../parser");
+const { compile } = require("../compiler");
+let pdfParse = null;
+try { pdfParse = require("pdf-parse"); } catch (_) { console.log("[pdf] pdf-parse not installed — attachment reading off"); }
+
+// Extract text from PDF attachments inside the raw MIME (base64 application/pdf parts).
+async function extractPdfTexts(raw) {
+  if (!pdfParse) return "";
+  const out = [];
+  const re = /Content-Type:\s*application\/pdf[\s\S]{0,400}?Content-Transfer-Encoding:\s*base64\s*\n\n?([A-Za-z0-9+/=\s]{500,})/gi;
+  let m;
+  while ((m = re.exec(raw)) !== null && out.length < 5) {
+    try {
+      const buf = Buffer.from(m[1].replace(/\s+/g, ""), "base64");
+      const d = await pdfParse(buf);
+      if (d.text && d.text.trim().length > 50) out.push(d.text);
+    } catch (e) { console.log("[pdf] attachment parse failed:", e.message); }
+  }
+  return out.join("\n\n");
+}
+
+// Client mobile from ticket text (10-digit after CONTACT/Mobile labels; skips agency landline patterns poorly — best-effort).
+function extractClientMobile(text) {
+  const ms = [...text.matchAll(/(?:CONTACT|MOBILE|PHONE)\s*:?\s*(?:\+?91[\s-]?)?([6-9]\d{9})\b/gi)].map((x) => x[1]);
+  return ms.length ? ms[ms.length - 1] : null; // last CONTACT is usually the passenger's on these layouts
+}
+
+// ---------- config ----------
+let fileCfg = {};
+const CFG_PATH = path.join(__dirname, "config.json");
+if (fs.existsSync(CFG_PATH)) { try { fileCfg = JSON.parse(fs.readFileSync(CFG_PATH, "utf8")); } catch (_) {} }
+const CFG = {
+  imapUser: process.env.IMAP_USER || fileCfg.imap?.user,
+  imapPass: process.env.IMAP_APP_PASSWORD || fileCfg.imap?.appPassword,
+  imapHost: process.env.IMAP_HOST || fileCfg.imap?.host || "imap.gmail.com",
+  imapPort: Number(process.env.IMAP_PORT || fileCfg.imap?.port || 993),
+  tgToken: process.env.TELEGRAM_BOT_TOKEN || fileCfg.telegram?.botToken,
+  tgChat: process.env.TELEGRAM_CHAT_ID || fileCfg.telegram?.chatId,
+  supabaseUrl: process.env.SUPABASE_URL,
+  supabaseKey: process.env.SUPABASE_SERVICE_KEY,
+  anthropicKey: process.env.ANTHROPIC_API_KEY || fileCfg.anthropicApiKey || "",
+  pollSeconds: Number(process.env.POLL_SECONDS || fileCfg.pollSeconds || 60),
+  agencySlug: process.env.AGENCY_SLUG || "finch-travels",
+};
+for (const k of ["imapUser","imapPass","tgToken","tgChat","supabaseUrl","supabaseKey"]) {
+  if (!CFG[k]) { console.error(`Missing config: ${k}`); process.exit(1); }
+}
+
+const sb = createClient(CFG.supabaseUrl, CFG.supabaseKey, { auth: { persistSession: false } });
+const mailer = nodemailer.createTransport({
+  host: "smtp.gmail.com", port: 587, secure: false, requireTLS: true,
+  auth: { user: CFG.imapUser, pass: CFG.imapPass },
+  connectionTimeout: 15000, greetingTimeout: 10000, socketTimeout: 20000,
+  pool: true, maxConnections: 1,
+});
+
+// ---------- WhatsApp delivery (Meta Cloud API) ----------
+const WA = {
+  token: process.env.WA_TOKEN || "",
+  phoneId: process.env.WA_PHONE_ID || "",
+  enabled() { return Boolean(this.token && this.phoneId); },
+};
+function normMobile(m) {
+  if (!m) return null;
+  let d = String(m).replace(/[^\d]/g, "");
+  if (d.length === 10) d = "91" + d;            // default India
+  if (d.length < 11 || d.length > 15) return null;
+  return d;
+}
+async function sendWhatsApp(toMobile, text) {
+  const to = normMobile(toMobile);
+  if (!to) return { ok: false, err: "invalid mobile" };
+  try {
+    const res = await fetch(`https://graph.facebook.com/v20.0/${WA.phoneId}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${WA.token}` },
+      body: JSON.stringify({ messaging_product: "whatsapp", to, type: "text", text: { body: text } }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      const code = data?.error?.code;
+      const msg = data?.error?.message || "unknown";
+      // 131047 / 131026: outside 24h window or recipient not opted in (test mode)
+      return { ok: false, err: `${code}: ${msg}` };
+    }
+    return { ok: true, id: data.messages?.[0]?.id };
+  } catch (e) { return { ok: false, err: e.message }; }
+}
+
+// ---------- agency directory (refreshed every 5 min) ----------
+let AGENCIES = [];
+let DEFAULT_AGENCY = null;
+async function loadAgencies() {
+  const { data, error } = await sb.from("agencies")
+    .select("id,name,slug,plan,trial_ends_at,notify_email,owner_phone,whatsapp,forward_sources,telegram_chat_id,alerts_email");
+  if (error) { console.error("[agencies-error]", error.message); return; }
+  AGENCIES = data || [];
+  DEFAULT_AGENCY = AGENCIES.find((a) => a.slug === CFG.agencySlug) || AGENCIES[0] || null;
+  console.log(`[agencies] loaded ${AGENCIES.length} (default: ${DEFAULT_AGENCY?.name})`);
+}
+
+function extractRouteAddresses(rawHead, email) {
+  const addrs = new Set();
+  const grab = (re) => { let m; while ((m = re.exec(rawHead)) !== null) addrs.add(m[1].toLowerCase()); };
+  grab(/^X-Forwarded-For:\s*(?:.*?<)?([^\s<>,]+@[^\s<>,]+)/gim);
+  grab(/^Delivered-To:\s*([^\s<>,]+@[^\s<>,]+)/gim);
+  grab(/^Return-Path:\s*<?([^\s<>,]+@[^\s<>,]+)>?/gim);
+  grab(/^To:\s*(?:.*?<)?([^\s<>,]+@[^\s<>,]+)/gim);
+  grab(/^X-Forwarded-To:\s*([^\s<>,]+@[^\s<>,]+)/gim);
+  const fromM = (email.from || "").match(/<?([^\s<>,]+@[^\s<>,]+)>?/);
+  if (fromM) addrs.add(fromM[1].toLowerCase());
+  addrs.delete(CFG.imapUser.toLowerCase());
+  return [...addrs];
+}
+function resolveAgency(rawHead, email) {
+  const addrs = extractRouteAddresses(rawHead, email);
+  // Priority 1: mail addressed to the agency's own @aviolink.in address
+  for (const a of AGENCIES) {
+    if (a.alerts_email && addrs.includes(String(a.alerts_email).toLowerCase())) return a;
+  }
+  // Priority 2: forwarded from a registered source mailbox
+  for (const a of AGENCIES) {
+    const sources = (a.forward_sources || []).map((s) => String(s).toLowerCase());
+    if (sources.some((s) => addrs.includes(s))) return a;
+  }
+  return DEFAULT_AGENCY;
+}
+function trialActive(a) {
+  if (!a) return false;
+  if (a.plan !== "trial") return true; // paid/starter/etc.
+  return !a.trial_ends_at || new Date(a.trial_ends_at) > new Date();
+}
+
+// ---------- Telegram (admin oversight) ----------
+const TG = `https://api.telegram.org/bot${CFG.tgToken}`;
+async function tg(method, payload) {
+  const res = await fetch(`${TG}/${method}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+  const data = await res.json();
+  if (!data.ok) console.error(`Telegram ${method}:`, data.description);
+  return data;
+}
+const esc = (s) => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+// WhatsApp markup -> Telegram HTML for a readable preview (*bold* -> <b>, _italic_ -> <i>)
+function waPreviewHtml(waText) {
+  return esc(waText)
+    .replace(/\*([^*\n]+)\*/g, "<b>$1</b>")
+    .replace(/_([^_\n]+)_/g, "<i>$1</i>");
+}
+async function adminCard(text, alertId) {
+  const payload = { chat_id: CFG.tgChat, text, parse_mode: "HTML" };
+  if (alertId) payload.reply_markup = { inline_keyboard: [[
+    { text: "✅ Approve", callback_data: `ap:${alertId}` },
+    { text: "❌ Skip", callback_data: `sk:${alertId}` },
+  ]]};
+  return tg("sendMessage", payload);
+}
+let tgOffset = 0;
+async function pollTelegram() {
+  const data = await tg("getUpdates", { offset: tgOffset, timeout: 0 });
+  for (const u of data.result || []) {
+    tgOffset = u.update_id + 1;
+    if (!u.callback_query) continue;
+    const [action, alertId] = (u.callback_query.data || "").split(":");
+    const status = action === "ap" ? "approved" : "skipped";
+    if (alertId && !["sweep","review","no-pnr"].includes(alertId)) {
+      await sb.from("alerts").update({ status, approved_at: new Date().toISOString() }).eq("id", alertId);
+      if (action === "ap" && WA.enabled()) {
+        // Deliver to client WhatsApp (booking mobile) or agency owner as fallback.
+        try {
+          const { data: al } = await sb.from("alerts").select("agency_id,pnr,compiled_whatsapp").eq("id", alertId).single();
+          if (al) {
+            let target = null, who = "";
+            if (al.pnr) {
+              const { data: bk } = await sb.from("bookings").select("mobile").eq("agency_id", al.agency_id).eq("pnr", al.pnr).maybeSingle();
+              if (bk?.mobile) { target = bk.mobile; who = "client"; }
+            }
+            if (!target) {
+              const ag = AGENCIES.find((a) => a.id === al.agency_id);
+              if (ag?.whatsapp || ag?.owner_phone) { target = ag.whatsapp || ag.owner_phone; who = "agency owner"; }
+            }
+            if (target) {
+              const r = await sendWhatsApp(target, al.compiled_whatsapp);
+              if (r.ok) {
+                await sb.from("alerts").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", alertId);
+                await tg("sendMessage", { chat_id: u.callback_query.message.chat.id, text: `📲 WhatsApp delivered to ${who} (${target})` });
+              } else {
+                await tg("sendMessage", { chat_id: u.callback_query.message.chat.id, text: `⚠️ WhatsApp failed (${r.err}).\nTest-mode tip: the recipient must be a verified test number AND must message the test number once ("hi") to open the 24h window.` });
+              }
+            } else {
+              await tg("sendMessage", { chat_id: u.callback_query.message.chat.id, text: `ℹ️ No mobile on file for this PNR — approved only. Add via ticket capture or bookings table.` });
+            }
+          }
+        } catch (e) { console.error("[wa-error]", e.message); }
+      }
+    }
+    await tg("answerCallbackQuery", { callback_query_id: u.callback_query.id, text: status.toUpperCase() });
+    await tg("editMessageReplyMarkup", { chat_id: u.callback_query.message.chat.id, message_id: u.callback_query.message.message_id, reply_markup: { inline_keyboard: [] } });
+  }
+}
+
+// ---------- Supabase helpers (agency-scoped) ----------
+async function alreadyProcessed(messageId) {
+  const { data } = await sb.from("mail_log").select("id").eq("message_id", messageId).limit(1);
+  return data && data.length > 0;
+}
+async function logMail(agencyId, messageId, subject, verdict, detail = "") {
+  await sb.from("mail_log").insert({ agency_id: agencyId, message_id: messageId, subject, verdict, detail });
+}
+async function upsertBooking(agencyId, parsed, extra = {}) {
+  await sb.from("bookings").upsert({
+    agency_id: agencyId, pnr: parsed.pnr, airline: parsed.airline || null,
+    passengers: parsed.passengers || [], segments: parsed.segments || [],
+    source: parsed.source || null, ...extra,
+  }, { onConflict: "agency_id,pnr" });
+}
+async function insertAlert(agencyId, parsed, compiledWhatsapp) {
+  const { data } = await sb.from("alerts").insert({
+    agency_id: agencyId, pnr: parsed.pnr, change_type: parsed.changeType,
+    payload: parsed, compiled_whatsapp: compiledWhatsapp,
+    confidence: parsed.confidence, source: parsed.source, status: "pending",
+  }).select("id").single();
+  return data?.id || null;
+}
+
+// ---------- per-agency delivery ----------
+let smtpFailures = 0;
+async function deliverToAgency(agency, parsed, msg, alertId) {
+  if (!agency?.notify_email) return false;
+  if (smtpFailures >= 2) { return false; } // SMTP blocked on this host — skip silently, Telegram is the channel
+  try {
+    await mailer.sendMail({
+      from: `"FlightAlert" <${CFG.imapUser}>`,
+      to: agency.notify_email,
+      subject: `⚡ ${msg.emailSubject}`,
+      text: `${msg.whatsapp}\n\n— — —\nCopy-paste the message above straight to your client's WhatsApp.\n\n${msg.emailBody}`,
+    });
+    if (alertId) await sb.from("alerts").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", alertId);
+    return true;
+  } catch (e) {
+    smtpFailures++;
+    console.error(`[deliver-error] ${agency.slug}: ${e.message}${smtpFailures >= 2 ? " — email delivery disabled until restart (host blocks SMTP)" : ""}`);
+    return false;
+  }
+}
+
+
+// Fill OLD timing from stored booking segments when a change shows only the NEW schedule
+// (IndiGo "Revised Itinerary" style). Match by flight number, else by sector. Returns true if anything changed.
+function enrichOldTiming(p, bookingSegments) {
+  const nf = (f) => String(f || "").toUpperCase().replace(/\s+/g, "");
+  let touched = false;
+  for (const s of p.segments || []) {
+    const nu = s.new || (s.dep || s.date ? { flight: s.flight, date: s.date, dep: s.dep, arr: s.arr } : null);
+    const hasOld = s.old && (s.old.dep || s.old.date);
+    if (hasOld || !nu) continue;
+    const bs = (bookingSegments || []).find((x) => (x.flight && nu.flight && nf(x.flight) === nf(nu.flight)) || (x.sector && s.sector && x.sector === s.sector));
+    if (bs && (bs.dep !== nu.dep || bs.date !== nu.date || bs.arr !== nu.arr)) {
+      s.old = { flight: bs.flight, date: bs.date, dep: bs.dep, arr: bs.arr };
+      s.new = nu; s.status = s.status || "CHANGED"; touched = true;
+      console.log(`[old-timing] ${p.pnr} ${s.sector}: ${bs.date} ${bs.dep} -> ${nu.date} ${nu.dep} (from booking)`);
+    }
+  }
+  return touched;
+}
+
+// ---------- per-mail handling ----------
+async function handleParsed(agency, parsed, subject, messageId) {
+  const conf = Math.round((parsed.confidence || 0) * 100);
+  const tag = `🏢 ${esc(agency.name)}`;
+
+  if (parsed.kind === "TICKET" && parsed.pnr) {
+    const mobile = extractClientMobile((parsed.raw && parsed.raw.subject ? "" : "") + JSON.stringify(parsed) ) || null;
+    const bodyMobile = parsed._bodyMobile || null;
+    await upsertBooking(agency.id, parsed, bodyMobile ? { mobile: bodyMobile } : {});
+    await logMail(agency.id, messageId, subject, "ticket", parsed.pnr);
+    await adminCard(`🎫 <b>BOOKING</b> — ${esc(parsed.pnr)} · ${tag}\n${esc((parsed.passengers||[]).join(", ")||"pax n/a")}${bodyMobile ? `\n📱 ${bodyMobile}` : ""}\n<i>${conf}% · ${esc(parsed.source)}</i>`);
+    console.log(`[ticket] ${agency.slug} ${parsed.pnr} (${conf}%)`);
+
+    // COMPLETION LOOP: fill any pending alert that was missing pax/PNR — only if this ticket HAS passengers.
+    if (!(parsed.passengers && parsed.passengers.length)) return;
+    try {
+      const flights = new Set((parsed.segments || []).map((s) => s.flight).filter(Boolean));
+      const { data: pend } = await sb.from("alerts").select("id,pnr,payload")
+        .eq("agency_id", agency.id).in("status", ["pending", "awaiting_data"]).limit(25);
+      for (const al of pend || []) {
+        const p = al.payload || {};
+        const paxMissing = !(p.passengers && p.passengers.length);
+        const pnrMatch = al.pnr && al.pnr === parsed.pnr;
+        const flightMatch = !al.pnr && (p.segments || []).some((s) =>
+          flights.has(s.old?.flight) || flights.has(s.new?.flight) || flights.has(s.flight));
+        if ((pnrMatch && paxMissing) || flightMatch) {
+          p.passengers = parsed.passengers || [];
+          p.pnr = p.pnr || parsed.pnr;
+          enrichOldTiming(p, parsed.segments);
+          const msg2 = compile(p, { name: agency.name, phone: agency.owner_phone || agency.whatsapp || "" });
+          await sb.from("alerts").update({ pnr: p.pnr, payload: p, compiled_whatsapp: msg2.whatsapp, status: "pending" }).eq("id", al.id);
+          if (trialActive(agency)) await deliverToAgency(agency, p, msg2, al.id);
+          await adminCard(`✅ <b>ALERT COMPLETED</b> with passenger details · ${tag}\n\n<pre>${esc(msg2.whatsapp)}</pre>`, al.id);
+          console.log(`[complete] alert ${al.id} filled from ticket ${parsed.pnr}`);
+        }
+      }
+    } catch (e) { console.error("[complete-error]", e.message); }
+    return;
+  }
+
+  if (parsed.kind === "SCHEDULE_CHANGE" && (parsed.segments || []).length) {
+    if (parsed.pnr) {
+      const { data: b } = await sb.from("bookings").select("passengers,mobile").eq("agency_id", agency.id).eq("pnr", parsed.pnr).maybeSingle();
+      if (b) {
+        if ((!parsed.passengers || !parsed.passengers.length) && b.passengers?.length) parsed.passengers = b.passengers;
+        parsed.clientMobile = b.mobile || null;
+        enrichOldTiming(parsed, b.segments);
+      }
+    }
+    // Duplicate = same PNR + same change type + identical old/new flight details.
+    // A different timing for the same PNR is a NEW change and must alert.
+    if (parsed.pnr) {
+      const fp = (p) => JSON.stringify({ t: p.changeType, s: (p.segments || []).map((s) => ({
+        st: s.status, sec: s.sector,
+        o: s.old ? [s.old.flight, s.old.date, s.old.dep, s.old.arr] : null,
+        n: s.new ? [s.new.flight, s.new.date, s.new.dep, s.new.arr] : null })) });
+      const mine = fp(parsed);
+      const { data: recent } = await sb.from("alerts").select("id,payload").eq("agency_id", agency.id).eq("pnr", parsed.pnr)
+        .gte("created_at", new Date(Date.now() - 72 * 3600 * 1000).toISOString()).limit(20);
+      if ((recent || []).some((r) => r.payload && fp(r.payload) === mine)) {
+        await logMail(agency.id, messageId, subject, "dup", parsed.pnr);
+        console.log(`[dup] ${agency.slug} ${parsed.pnr} identical change already alerted — skipped`);
+        return;
+      }
+    }
+    const msg = compile(parsed, { name: agency.name, phone: agency.owner_phone || agency.whatsapp || "" });
+    const alertId = await insertAlert(agency.id, parsed, msg.whatsapp);
+    await logMail(agency.id, messageId, subject, "change", parsed.pnr || "");
+
+    let deliveredNote = "";
+    const hasFullData = Boolean(parsed.pnr && parsed.passengers && parsed.passengers.length);
+    // Urgency override: flight within 48h -> deliver even if incomplete.
+    const soonest = (parsed.segments || []).map((s) => s.old?.date || s.date).filter(Boolean).sort()[0];
+    const imminent = soonest && (new Date(soonest + "T23:59:59") - Date.now()) < 48 * 3600 * 1000;
+    if (!hasFullData && imminent) {
+      const urgent = { ...parsed };
+      const msgU = compile(urgent, { name: agency.name, phone: agency.owner_phone || agency.whatsapp || "" });
+      msgU.whatsapp = "⚠️ *URGENT — flight imminent*\n" + msgU.whatsapp;
+      msgU.emailSubject = "URGENT | " + msgU.emailSubject;
+      if (trialActive(agency)) {
+        const ok = await deliverToAgency(agency, urgent, msgU, alertId);
+        deliveredNote = ok ? `\n🚨 <b>URGENT (≤48h)</b> — delivered despite incomplete data (${esc(agency.notify_email)})` : `\n⚠️ urgent delivery failed`;
+      } else deliveredNote = `\n⏸ trial expired`;
+    } else if (!hasFullData) {
+      await sb.from("alerts").update({ status: "awaiting_data" }).eq("id", alertId);
+      deliveredNote = `\n⏸ <b>HELD — incomplete data, not delivered.</b> Will auto-complete & deliver when the ticket arrives.`;
+    } else if (trialActive(agency)) {
+      const ok = await deliverToAgency(agency, parsed, msg, alertId);
+      deliveredNote = ok ? `\n📬 delivered to ${esc(agency.notify_email)}` : `\n⚠️ delivery failed`;
+    } else {
+      deliveredNote = `\n⏸ trial expired — not delivered`;
+    }
+    const header = conf >= 85 ? `⚡ <b>SCHEDULE CHANGE</b> (${conf}%)` : `⚠️ <b>SCHEDULE CHANGE — ${conf}%, verify</b>`;
+    const askTicket = (!parsed.passengers || !parsed.passengers.length)
+      ? `\n↩️ <i>Forward the original ticket mail — the alert will auto-complete with passenger details.</i>` : "";
+    await adminCard(
+      `${header} · ${tag}${deliveredNote}${askTicket}\n\n` +
+      `${waPreviewHtml(msg.whatsapp)}\n\n` +
+      `📋 <i>Tap to copy for WhatsApp:</i>\n<pre>${esc(msg.whatsapp)}</pre>`,
+      alertId
+    );
+    console.log(`[change] ${agency.slug} ${parsed.pnr} alert ${alertId} (${conf}%)`);
+    return;
+  }
+
+  await logMail(agency.id, messageId, subject, "review");
+  await adminCard(`🔍 <b>UNRECOGNISED</b> · ${tag}\nSubject: ${esc(subject)}`);
+  console.log(`[review] ${agency.slug} ${subject}`);
+}
+
+// ---------- relevance gates ----------
+const AIRLINE_HINTS = /(airindia|goindigo|spicejet|akasaair|airindiaexpress|flydubai|emirates|qatarairways|etihad|singaporeair|turkishairlines|lufthansa|britishairways|riyadhair|saudia|flynas|airarabia|vistara|gulfair|omanair|kuwaitairways|srilankan|malaysiaairlines|thaiairways|cathaypacific|klm|airfrance|virginatlantic|americanairlines|united|delta|travelport|galileo|tripjack|tbo|travclan|mystifly|akbartravels|cleartrip|makemytrip|yatra|easemytrip|ixigo)/i;
+// Generic airline-sender pattern: alerts@/notifications@/noreply@ *air*/airlines/airways domains
+const AIRLINE_SENDER = /@(?:[a-z0-9.-]*\b(?:air|airline|airways|aviation|fly)[a-z0-9-]*)\.[a-z]{2,}/i;
+const NEGATIVE_HINTS = /(login otp|otp email|one[- ]?time password|verification code|verify your|password reset|security alert|two[- ]?step|2-step|unsubscribe|newsletter|webinar|special offer|sale ends|promo(tion)?|discount|airport transfers|hotel deal|earn (points|miles|bluchips)|credit card offer|introducing|unmatched convenience|now (flying|connecting)|new route|inaugural|premium economy on|fare sale|book now and|boarding pass|web check-?in is now open|complete (your )?payment|feedback|survey|as per your (request|instruction)|your (cancellation|refund|change|rebooking) request|cancellation request (received|processed|confirmed)|refund (request|processed|initiated|status)|request for (cancellation|date change|reissue)|we have (cancelled|canceled) your booking as requested)/i;
+const GST_HINTS = /(tax ?invoice|gst invoice|invoice for your (booking|travel)|e-invoice)/i;
+const SUBJECT_HINTS = /(schedule (change|modification)|time change|flight (change|update|advisory|disruption|cancellation|delay)|\bdelays?\b|delayed|earlier departure|departure (is )?(now )?earlier|itinerary( change)?|revised (itinerary|schedule)|updated itinerary|new itinerary|resched|retimed|re-timed|cancel+ed|reaccommodat|re-accommodat|rebook|postponed|departure time|gate change|terminal change|e-?ticket|electronic ticket|ticket confirmation|booking (ref|reference|confirmation|confirmed)|reservation (confirmation|code)|record locator|confirmation number|travel (details|itinerary)|trip details|flight (details|booking|itinerary)|your (trip|upcoming flight)|PNR|galileo queue)/i;
+function looksRelevant(email) {
+  if (NEGATIVE_HINTS.test(email.subject || "")) return false;
+  return AIRLINE_HINTS.test(email.from||"") || AIRLINE_HINTS.test(email.originalFrom||"") ||
+         AIRLINE_SENDER.test(email.from||"") || AIRLINE_SENDER.test(email.originalFrom||"") ||
+         AIRLINE_HINTS.test(email.body.slice(0,2000)) || SUBJECT_HINTS.test(email.subject||"");
+}
+
+// ---------- welcome mails for new signups ----------
+async function sendWelcomes() {
+  const { data: fresh } = await sb.from("agencies")
+    .select("id,name,slug,contact_name,notify_email,alerts_email")
+    .eq("welcome_sent", false).not("notify_email", "is", null).limit(10);
+  for (const a of fresh || []) {
+    try {
+      await mailer.sendMail({
+        from: `"Aviolink" <${CFG.imapUser}>`,
+        to: a.notify_email,
+        subject: `Welcome to Aviolink, ${a.name} — your FlightAlert trial is active ✈️`,
+        text:
+`Hi ${a.contact_name || a.name},
+
+Your 30-day FlightAlert trial is active. One step left (2 minutes, one time):
+
+YOUR PRIVATE AVIOLINK ADDRESS:
+${a.alerts_email}
+
+SET AUTO-FORWARDING:
+1. Open the mailbox where your airline/vendor mails arrive
+2. Settings -> Forwarding -> Add forwarding address: ${a.alerts_email}
+3. Confirm the verification mail, then select "Forward a copy of incoming mail" (keep copy in Inbox) -> Save
+
+That's it. From the next airline mail onward, every flight change and cancellation lands in this inbox, fully formatted and WhatsApp-ready.
+
+Tips:
+- Also forward your recent unflown ticket mails once - alerts will then always carry your passenger's name.
+- We read only airline/booking mails; everything else is discarded instantly.
+
+Questions? Reply to this mail, write to support@aviolink.in or WhatsApp +91-9503255845.
+
+Fly safe,
+Team Aviolink
+https://aviolink.in`,
+      });
+      await sb.from("agencies").update({ welcome_sent: true }).eq("id", a.id);
+      await tg("sendMessage", { chat_id: CFG.tgChat, text: `👋 New signup welcomed: ${a.name} (${a.notify_email}) -> ${a.alerts_email}` });
+      console.log(`[welcome] ${a.slug}`);
+    } catch (e) { console.error(`[welcome-error] ${a.slug}: ${e.message}`); }
+  }
+}
+
+// ---------- mail polling ----------
+async function pollMailbox() {
+  const client = new ImapFlow({ host: CFG.imapHost, port: CFG.imapPort, secure: true,
+    auth: { user: CFG.imapUser, pass: CFG.imapPass }, logger: false });
+  client.on("error", (e) => console.error("[imap-error]", e.message)); // never let a socket timeout crash the process
+  await Promise.race([client.connect(), new Promise((_, rej) => setTimeout(() => rej(new Error("IMAP connect timeout (Gmail connection limit? remove old deployments)")), 30000))]);
+  const lock = await client.getMailboxLock("INBOX");
+  try {
+    // Process by time-window + own dedupe (mail_log), NOT by unread status —
+    // a human opening a mail must never hide it from the system.
+    const uids = await client.search({ since: new Date(Date.now() - 3 * 86400000) });
+    // FAST PATH: headers only for everything, one DB lookup for known ids, then
+    // download full content ONLY for new mails — newest first.
+    const envelopes = [];
+    for await (const m of client.fetch(uids || [], { envelope: true, uid: true })) {
+      envelopes.push({ uid: m.uid, mid: m.envelope?.messageId || `uid-${m.uid}`, subject: m.envelope?.subject || "(no subject)" });
+    }
+    const { data: known } = await sb.from("mail_log").select("message_id")
+      .gte("created_at", new Date(Date.now() - 4 * 86400000).toISOString());
+    const knownIds = new Set((known || []).map((r) => r.message_id));
+    const fresh = envelopes.filter((e) => !knownIds.has(e.mid)).sort((a, b) => b.uid - a.uid);
+    console.log(`[poll] ${envelopes.length} mails in 3-day window, ${fresh.length} new`);
+
+    for (const item of fresh) {
+      const uid = item.uid;
+      const msg = await client.fetchOne(uid, { source: true, envelope: true }, { uid: true });
+      const mid = item.mid;
+      if (!msg || !msg.source) { console.log(`[skip] could not fetch uid ${uid} (${item.subject})`); continue; }
+
+      const raw = msg.source.toString("utf8");
+      const rawHead = raw.slice(0, raw.indexOf("\n\n") === -1 ? raw.length : raw.indexOf("\n\n"));
+      const subject = msg.envelope.subject || "(no subject)";
+      const email = splitEmail(raw);
+      // Passenger hint: airlines often address "PAX NAME <agency@mail>" in To:
+      // Only trust a To: display name when the address is the AGENCY's own mailbox (original airline header,
+      // preserved by auto-forward). Never when it points at our collection inbox or an @aviolink.in address —
+      // that is a manual forward and the name is whatever the sender's contacts say.
+      const toM = rawHead.match(/^To:\s*"?([A-Z][A-Za-z .']{4,40}?)"?\s*<([^>]+)>/m);
+      const toAddr = (toM?.[2] || "").toLowerCase();
+      const toName = toM?.[1];
+      const toIsOurs = toAddr === CFG.imapUser.toLowerCase() || toAddr.endsWith("@aviolink.in");
+      email.toDisplayName = (toName && !toIsOurs && !/info|ops|ticket|travel|mail|support|team/i.test(toName)) ? toName.trim() : null;
+      const pdfText = await extractPdfTexts(raw);
+      if (pdfText) {
+        email.body += "\n\n===PDF ATTACHMENT TEXT===\n" + pdfText;
+        console.log(`[pdf] extracted ${pdfText.length} chars from attachment(s)`);
+      }
+      const agency = resolveAgency(rawHead, email) || DEFAULT_AGENCY;
+      console.log(`[mail] (${agency?.slug}) ${subject}`);
+
+      if (GST_HINTS.test(subject)) {
+        await sb.from("gst_invoices").insert({ agency_id: agency.id, subject, invoice_ref: (subject.match(/[A-Z]{2}\d{6,}[A-Z0-9]*/)||[])[0]||null });
+        await logMail(agency.id, mid, subject, "gst");
+      } else if (!looksRelevant(email)) {
+        await logMail(agency.id, mid, subject, "skip");
+        console.log(`[skip] ${subject}`);
+      } else if (/GALILEO QUEUE CAPTURE/i.test(subject)) {
+        const gq = require("../templates/galileo-queue");
+        const all = fs.existsSync(path.join(__dirname, "..", "templates", "galileo-queue.js")) ? gq.parseAll(email, helpers) : [];
+        const total = (email.body.match(/===== CAPTURE/g) || []).length;
+        for (const one of all) {
+          one.kind = "SCHEDULE_CHANGE"; one.confidence = 0.95; one.source = "template:galileo-queue-v1";
+          if (one.phone && one.pnr) await upsertBooking(agency.id, one, { mobile: one.phone });
+          await handleParsed(agency, one, subject, `${mid}#${one.pnr}`);
+        }
+        await logMail(agency.id, mid, subject, "queue-sweep", `${total} scanned, ${all.length} changes`);
+        await adminCard(`🧾 <b>QUEUE SWEEP</b> · 🏢 ${esc(agency.name)}\nScanned ${total} · changes ${all.length}`);
+      } else {
+        const parsed = await parseEmail(raw, { ai: Boolean(CFG.anthropicKey), apiKey: CFG.anthropicKey || undefined });
+        parsed._bodyMobile = extractClientMobile(email.body);
+        if ((!parsed.passengers || !parsed.passengers.length) && email.toDisplayName) {
+          parsed.passengers = [email.toDisplayName];
+          console.log(`[pax-hint] from To: header -> ${email.toDisplayName}`);
+        }
+        if ((parsed.confidence || 0) === 0 && !SUBJECT_HINTS.test(subject)) {
+          await logMail(agency.id, mid, subject, "skip", "airline mail, not booking-related");
+        } else {
+          await handleParsed(agency, parsed, subject, mid);
+        }
+      }
+      await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });
+    }
+  } finally {
+    lock.release();
+    await client.logout().catch(() => {});
+  }
+}
+
+// ---------- main ----------
+(async () => {
+  await loadAgencies();
+  if (!DEFAULT_AGENCY) { console.error("No agencies in DB — run the schema SQL."); process.exit(1); }
+  await tg("sendMessage", { chat_id: CFG.tgChat, text: `☁️ FlightAlert worker v2 — ${AGENCIES.length} agencies loaded, watching ${CFG.imapUser}` });
+  const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`poll timed out after ${ms / 1000}s`)), ms))]);
+  let polling = false;
+  const mailLoop = async () => {
+    if (polling) { console.log("[poll] previous cycle still running, skipping"); setTimeout(mailLoop, CFG.pollSeconds * 1000); return; }
+    polling = true;
+    try { await withTimeout(pollMailbox(), 300000); } catch (e) { console.error("[mail-error]", e.message); }
+    polling = false;
+    setTimeout(mailLoop, CFG.pollSeconds * 1000);
+  };
+  const tgLoop = async () => { try { await pollTelegram(); } catch (e) { console.error("[tg-error]", e.message); } setTimeout(tgLoop, 3000); };
+  const agLoop = async () => { try { await loadAgencies(); await sendWelcomes(); } catch (_) {} setTimeout(agLoop, 120000); };
+  sendWelcomes().catch(()=>{});
+  mailLoop(); tgLoop(); setTimeout(agLoop, 120000);
+})();

@@ -181,7 +181,7 @@ async function aiFallback(email, opts = {}) {
         model: opts.model || process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001",
         max_tokens: 2000,
         system: FALLBACK_SYSTEM_PROMPT,
-        messages: [{ role: "user", content: `SUBJECT: ${email.subject}\nFROM: ${email.from}\n\n${(email.body || "").slice(0, 30000)}` }],
+        messages: [{ role: "user", content: `TODAY: ${new Date().toISOString().slice(0, 10)} (all flight dates are on or after today unless the mail clearly states otherwise; when a date has no year, use the next occurrence from today)\nSUBJECT: ${email.subject}\nFROM: ${email.from}\n\n${(email.body || "").slice(0, 30000)}` }],
       }),
     });
     if (!res.ok) {

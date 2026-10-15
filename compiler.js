@@ -48,14 +48,16 @@ function compile(parsed, agency = {}) {
     if (s.sector) L.push(`📍 *Sector:* ${sectorArrow(s.sector)}`);
     const dateLine = s.old && s.old.date ? fmtDate(s.old.date) : null;
     if (dateLine) L.push(`📅 *Date:* ${dateLine}`);
-    if (s.old) {
+    const oldKnown = s.old && (s.old.dep || s.old.arr || s.status === "CANCELLED");
+    const times = (x) => (x.dep ? `Dep ${x.dep}` : "") + (x.arr ? `${x.dep ? " — " : ""}Arr ${x.arr}` : "");
+    if (oldKnown) {
       L.push(`❌ *${s.status === "CANCELLED" ? "Cancelled" : "Old timing"}:* ${s.old.flight || ""}`);
-      if (s.old.dep) L.push(`   Dep ${s.old.dep}${s.old.arr ? " — Arr " + s.old.arr : ""}`);
+      if (times(s.old)) L.push(`   ${times(s.old)}`);
     }
     if (s.new) {
-      L.push(`✅ *New timing:* ${s.new.flight || ""}`);
-      if (s.new.dep) L.push(`   Dep ${s.new.dep}${s.new.arr ? " — Arr " + s.new.arr : ""}`);
-      if (s.new.date && s.old && s.new.date !== s.old.date) L.push(`   (now on ${fmtDate(s.new.date)})`);
+      L.push(`${oldKnown ? "✅ *New timing:*" : "🕒 *Revised timing:*"} ${s.new.flight || ""}`);
+      if (times(s.new)) L.push(`   ${times(s.new)}`);
+      if (s.new.date && s.old && s.old.date && s.new.date !== s.old.date) L.push(`   (now on ${fmtDate(s.new.date)})`);
     }
     L.push("");
   });

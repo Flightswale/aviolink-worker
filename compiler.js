@@ -23,6 +23,8 @@ function titleCase(name) {
   return String(name||"").toLowerCase().replace(/\//," / ")
     .replace(/\b[a-z]/g,(c)=>c.toUpperCase()).replace(/\s+/g," ").trim();
 }
+const AIRLINES = { "6E":"IndiGo","AI":"Air India","IX":"Air India Express","UK":"Vistara","SG":"SpiceJet","QP":"Akasa Air","9I":"Alliance Air","S5":"Star Air","EK":"Emirates","EY":"Etihad","QR":"Qatar Airways","SV":"Saudia","RX":"Riyadh Air","GF":"Gulf Air","WY":"Oman Air","FZ":"flydubai","G9":"Air Arabia","KU":"Kuwait Airways","TK":"Turkish Airlines","LH":"Lufthansa","BA":"British Airways","AF":"Air France","KL":"KLM","LX":"Swiss","OS":"Austrian","SQ":"Singapore Airlines","TG":"Thai Airways","MH":"Malaysia Airlines","CX":"Cathay Pacific","QF":"Qantas","UL":"SriLankan","VS":"Virgin Atlantic","UA":"United","DL":"Delta","AA":"American Airlines","AC":"Air Canada","ET":"Ethiopian","KQ":"Kenya Airways","NH":"ANA","JL":"Japan Airlines","KE":"Korean Air","OZ":"Asiana","VN":"Vietnam Airlines","PR":"Philippine Airlines","GA":"Garuda","AK":"AirAsia","D7":"AirAsia X","FD":"Thai AirAsia","TR":"Scoot","3K":"Jetstar Asia","BG":"Biman","RA":"Nepal Airlines","KB":"Druk Air","B3":"Bhutan Airlines","AZ":"ITA Airways","IB":"Iberia","TP":"TAP Portugal","LO":"LOT","SK":"SAS","AY":"Finnair","EI":"Aer Lingus","U2":"easyJet","FR":"Ryanair" };
+function airlineName(code){ const c=String(code||"").toUpperCase().trim(); return AIRLINES[c] ? `${AIRLINES[c]} (${c})` : code; }
 function sectorArrow(sector){ return sector ? sector.replace("-"," → ") : ""; }
 
 function compile(parsed, agency = {}) {
@@ -40,12 +42,13 @@ function compile(parsed, agency = {}) {
   else if (pax.length > 1) { L.push(`👤 *Passengers:*`); pax.forEach((p)=>L.push(`   • ${p}`)); if (extra) L.push(`   • and${extra} more`); }
   else L.push(`👤 *Passenger:* (see booking)${extra}`);
   L.push(`🎫 *PNR:* ${parsed.pnr || "check original mail"}`);
-  if (parsed.airline) L.push(`✈️ *Airline:* ${parsed.airline}`);
+  if (parsed.airline) L.push(`✈️ *Airline:* ${airlineName(parsed.airline)}`);
   L.push("");
 
   const segs = parsed.segments || [];
   const t = (x) => x ? `${x.dep || "--:--"} – ${x.arr || "--:--"}${x.arrDayOffset ? " (+" + x.arrDayOffset + ")" : ""}` : "";
-  const line = (s, leg, mark) => `${leg.flight || s.sector || "Flight"} · ${fmtDateShort(leg.date)} · ${sectorArrow(s.sector)} · ${mark ? "*" + t(leg) + "*" : t(leg)}${mark ? " ⬅️" : ""}`;
+  // Two short lines per leg so nothing wraps on a phone screen
+  const line = (s, leg, mark) => `${leg.flight || s.sector || "Flight"} · ${sectorArrow(s.sector)} · ${fmtDateShort(leg.date)}\n      ${mark ? "*" + t(leg) + "* ⬅️" : t(leg)}`;
   const hasAnyOld = segs.some((s) => s.old && (s.old.dep || s.old.arr));
   const changedIdx = new Set(segs.map((s, i) => (s.status !== "UNCHANGED" && s.new && s.old && (s.old.dep !== s.new.dep || s.old.arr !== s.new.arr || s.old.date !== s.new.date || s.old.flight !== s.new.flight)) ? i : -1).filter((i) => i >= 0));
 

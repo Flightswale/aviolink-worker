@@ -78,10 +78,8 @@ function compile(parsed, agency = {}) {
     L.push("Reply *1* or *2*, or call us.");
   } else {
     if (parsed.actionDeadline) L.push(`⏰ *Confirm by:* ${fmtDateShort(parsed.actionDeadline)}`);
-    L.push("Reply *YES* to accept the new");
-    L.push("timing, or call us for options.");
+    L.push("For any queries, please contact");
   }
-  L.push("");
   L.push(`*${A.name}*${A.phone ? `  📞 ${A.phone}` : ""}`);
   if (A.footer) L.push(`_${A.footer}_`);
 

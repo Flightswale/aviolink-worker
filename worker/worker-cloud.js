@@ -179,6 +179,21 @@ async function pollTelegram() {
   const data = await tg("getUpdates", { offset: tgOffset, timeout: 0 });
   for (const u of data.result || []) {
     tgOffset = u.update_id + 1;
+    // /retest PNR  -> forget this PNR's recent mails + alerts so the next poll re-reads them (no re-forwarding needed)
+    const txt = (u.message?.text || "").trim();
+    if (txt.startsWith("/retest")) {
+      const pnr = (txt.split(/\s+/)[1] || "").toUpperCase();
+      if (!/^[A-Z0-9]{5,7}$/.test(pnr)) { await tg("sendMessage", { chat_id: u.message.chat.id, text: "Usage: /retest PNR" }); continue; }
+      const since = new Date(Date.now() - 3 * 86400000).toISOString();
+      const { data: logs } = await sb.from("mail_log").select("id,subject").gte("created_at", since)
+        .or(`subject.ilike.%${pnr}%,detail.ilike.%${pnr}%`);
+      const ids = (logs || []).map((r) => r.id);
+      if (ids.length) await sb.from("mail_log").delete().in("id", ids);
+      const { data: als } = await sb.from("alerts").select("id").eq("pnr", pnr).gte("created_at", since);
+      if (als && als.length) await sb.from("alerts").delete().in("id", als.map((a) => a.id));
+      await tg("sendMessage", { chat_id: u.message.chat.id, text: `🔁 Retest ${pnr}: ${ids.length} mail(s) will be re-read on the next poll (≤60s), ${als?.length || 0} old alert(s) cleared.` });
+      continue;
+    }
     if (!u.callback_query) continue;
     const [action, alertId] = (u.callback_query.data || "").split(":");
     const status = action === "ap" ? "approved" : "skipped";

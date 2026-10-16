@@ -643,6 +643,16 @@ function startHttp() {
     const u = new URL(req.url, "http://x");
     try {
       if (u.pathname === "/health") { res.writeHead(200, { "content-type": "text/plain" }); return res.end("ok"); }
+      const page = (title, msg) => { res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        return res.end(`<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>Aviolink</title><body style="font-family:system-ui;background:#eef2fb;display:grid;place-items:center;min-height:100vh;margin:0"><div style="background:#fff;padding:32px;border-radius:14px;max-width:420px;text-align:center;box-shadow:0 8px 30px rgba(30,39,97,.15)"><h2 style="color:#1E2761">${title}</h2><p style="color:#374151;line-height:1.5">${msg}</p></div>`); };
+      // Simple link: /connect/<agency-slug>  e.g. /connect/finch-travels
+      const cm = u.pathname.match(/^\/connect\/([a-z0-9-]+)$/);
+      if (cm) {
+        if (!gmail.enabled()) return page("Not ready", "Google sign-in is not configured yet.");
+        const a = AGENCIES.find((x) => x.slug === cm[1]);
+        if (!a) return page("Unknown agency", `No agency called “${esc(cm[1])}”.`);
+        res.writeHead(302, { location: gmail.authUrl(a.id) }); return res.end();
+      }
       if (u.pathname === "/auth/google") {
         const agencyId = u.searchParams.get("agency") || "";
         if (!gmail.enabled()) { res.writeHead(503); return res.end("Google sign-in not configured"); }
@@ -652,9 +662,9 @@ function startHttp() {
       if (u.pathname === "/auth/google/callback") {
         const agencyId = gmail.verifyState(u.searchParams.get("state"));
         const code = u.searchParams.get("code");
-        if (!agencyId || !code) { res.writeHead(302, { location: `${site}/?connected=error` }); return res.end(); }
+        if (!agencyId || !code) return page("Not connected", "Google sign-in was cancelled or failed. Please open the link again.");
         const tok = await gmail.exchangeCode(code);
-        if (!tok.refresh_token) { res.writeHead(302, { location: `${site}/?connected=error&why=norefresh` }); return res.end(); }
+        if (!tok.refresh_token) return page("Not connected", "Google did not give offline access. Please open the link again and click Allow.");
         const prof = await gmail.profile(tok.access_token);
         const { error } = await sb.from("agencies").update({
           gmail_email: prof.emailAddress, gmail_refresh_token: tok.refresh_token,
@@ -665,14 +675,14 @@ function startHttp() {
         await loadAgencies();
         const a = AGENCIES.find((x) => x.id === agencyId);
         await adminCard(`🔗 <b>GMAIL CONNECTED</b> · 🏢 ${esc(a?.name || agencyId)}\n${esc(prof.emailAddress)} — backfill starting`);
-        res.writeHead(302, { location: `${site}/?connected=${encodeURIComponent(prof.emailAddress)}` }); return res.end();
+        return page("✅ Gmail connected", `<b>${esc(prof.emailAddress)}</b> is now linked to <b>${esc(a?.name || "your agency")}</b>.<br><br>We are reading your past 12 months of ticket mails, then watching every new schedule change and cancellation. You can close this page.`);
       }
       res.writeHead(404); res.end("not found");
     } catch (e) {
       console.error("[http-error]", e.message);
-      res.writeHead(302, { location: `${site}/?connected=error` }); res.end();
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end("<h3>Connection failed — please open the link again.</h3>");
     }
-  }).listen(port, () => console.log(`[http] listening on ${port}${gmail.enabled() ? " — Google sign-in ON" : " — Google sign-in OFF (set GOOGLE_CLIENT_ID/SECRET/PUBLIC_URL)"}`));
+  }).listen(port, () => console.log(`[http] listening on ${port}${gmail.enabled() ? ` — Google sign-in ON at ${gmail.PUBLIC_URL}` : " — Google sign-in OFF (needs Generate Domain + GOOGLE_CLIENT_ID/SECRET)"}`));
 }
 
 // ---------- main ----------

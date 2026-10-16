@@ -9,7 +9,8 @@ const crypto = require("crypto");
 
 const CID = process.env.GOOGLE_CLIENT_ID || "";
 const CSEC = process.env.GOOGLE_CLIENT_SECRET || "";
-const PUBLIC_URL = (process.env.PUBLIC_URL || "").replace(/\/$/, "");
+// Railway sets RAILWAY_PUBLIC_DOMAIN automatically once "Generate Domain" is clicked — no variable needed.
+const PUBLIC_URL = (process.env.PUBLIC_URL || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : "")).replace(/\/$/, "");
 const REDIRECT = `${PUBLIC_URL}/auth/google/callback`;
 const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly", "openid", "email"].join(" ");
 

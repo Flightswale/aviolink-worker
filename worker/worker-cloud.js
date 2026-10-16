@@ -484,14 +484,7 @@ async function pollMailbox() {
       const subject = msg.envelope.subject || "(no subject)";
       const email = splitEmail(raw);
       // Passenger hint: airlines often address "PAX NAME <agency@mail>" in To:
-      // Only trust a To: display name when the address is the AGENCY's own mailbox (original airline header,
-      // preserved by auto-forward). Never when it points at our collection inbox or an @aviolink.in address —
-      // that is a manual forward and the name is whatever the sender's contacts say.
-      const toM = rawHead.match(/^To:\s*"?([A-Z][A-Za-z .']{4,40}?)"?\s*<([^>]+)>/m);
-      const toAddr = (toM?.[2] || "").toLowerCase();
-      const toName = toM?.[1];
-      const toIsOurs = toAddr === CFG.imapUser.toLowerCase() || toAddr.endsWith("@aviolink.in");
-      email.toDisplayName = (toName && !toIsOurs && !/info|ops|ticket|travel|mail|support|team/i.test(toName)) ? toName.trim() : null;
+      email.toDisplayName = null; // To: display name is the agency contact (IndiGo), never the passenger
       const pdfText = await extractPdfTexts(raw);
       if (pdfText) {
         email.body += "\n\n===PDF ATTACHMENT TEXT===\n" + pdfText;
@@ -520,10 +513,6 @@ async function pollMailbox() {
       } else {
         const parsed = await parseEmail(raw, { ai: Boolean(CFG.anthropicKey), apiKey: CFG.anthropicKey || undefined });
         parsed._bodyMobile = extractClientMobile(email.body);
-        if ((!parsed.passengers || !parsed.passengers.length) && email.toDisplayName) {
-          parsed.passengers = [email.toDisplayName];
-          console.log(`[pax-hint] from To: header -> ${email.toDisplayName}`);
-        }
         if ((parsed.confidence || 0) === 0 && !SUBJECT_HINTS.test(subject)) {
           await logMail(agency.id, mid, subject, "skip", "airline mail, not booking-related");
         } else {

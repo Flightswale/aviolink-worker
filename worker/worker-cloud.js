@@ -20,6 +20,8 @@ const nodemailer = require("nodemailer");
 const { createClient } = require("@supabase/supabase-js");
 const { parseEmail, splitEmail, helpers } = require("../parser");
 const { compile } = require("../compiler");
+const http = require("http");
+const gmail = require("../gmail");
 let pdfParse = null;
 try { pdfParse = require("pdf-parse"); } catch (_) { console.log("[pdf] pdf-parse not installed — attachment reading off"); }
 
@@ -112,7 +114,7 @@ let AGENCIES = [];
 let DEFAULT_AGENCY = null;
 async function loadAgencies() {
   const { data, error } = await sb.from("agencies")
-    .select("id,name,slug,plan,trial_ends_at,notify_email,owner_phone,whatsapp,forward_sources,telegram_chat_id,alerts_email");
+    .select("id,name,slug,plan,trial_ends_at,notify_email,owner_phone,whatsapp,forward_sources,telegram_chat_id,alerts_email,gmail_email,gmail_refresh_token,gmail_backfill_status");
   if (error) { console.error("[agencies-error]", error.message); return; }
   AGENCIES = data || [];
   DEFAULT_AGENCY = AGENCIES.find((a) => a.slug === CFG.agencySlug) || AGENCIES[0] || null;
@@ -466,6 +468,65 @@ https://aviolink.in`,
 }
 
 // ---------- mail polling ----------
+// One mail, from any source (IMAP forward inbox or an agency's own Gmail) -> same pipeline.
+async function processRaw(raw, mid, subject, forcedAgency = null, opts = {}) {
+    const rawHead = raw.slice(0, raw.indexOf("\n\n") === -1 ? raw.length : raw.indexOf("\n\n"));
+    const email = splitEmail(raw);
+    // Passenger hint: airlines often address "PAX NAME <agency@mail>" in To:
+    email.toDisplayName = null; // To: display name is the agency contact (IndiGo), never the passenger
+    const pdfText = await extractPdfTexts(raw);
+    if (pdfText) {
+      email.body += "\n\n===PDF ATTACHMENT TEXT===\n" + pdfText;
+      console.log(`[pdf] extracted ${pdfText.length} chars from attachment(s)`);
+    }
+    const agency = forcedAgency || resolveAgency(rawHead, email) || DEFAULT_AGENCY;
+    console.log(`[mail] (${agency?.slug}) ${subject}`);
+    if (!forcedAgency && agency.gmail_refresh_token && gmail.enabled()) {
+      // This agency's Gmail is read directly — a forwarded copy would only create duplicates.
+      await logMail(agency.id, mid, subject, "skip", "agency reads Gmail directly");
+      return;
+    }
+
+    if (opts.bookingsOnly) {
+      if (!looksRelevant(email)) { await logMail(agency.id, mid, subject, "backfill-skip"); return; }
+      const parsed = await parseEmail(raw, { ai: Boolean(CFG.anthropicKey), apiKey: CFG.anthropicKey || undefined });
+      if (parsed.kind === "TICKET" && parsed.pnr) {
+        await upsertBooking(agency.id, parsed, extractClientMobile(email.body) ? { mobile: extractClientMobile(email.body) } : {});
+        await logMail(agency.id, mid, subject, "backfill-ticket", parsed.pnr);
+        console.log(`[backfill] ${agency.slug} ticket ${parsed.pnr} (${(parsed.passengers||[]).length} pax)`);
+        return true;
+      }
+      await logMail(agency.id, mid, subject, "backfill-skip", parsed.kind || "");
+      return false;
+    }
+    if (GST_HINTS.test(subject)) {
+      await sb.from("gst_invoices").insert({ agency_id: agency.id, subject, invoice_ref: (subject.match(/[A-Z]{2}\d{6,}[A-Z0-9]*/)||[])[0]||null });
+      await logMail(agency.id, mid, subject, "gst");
+    } else if (!looksRelevant(email)) {
+      await logMail(agency.id, mid, subject, "skip");
+      console.log(`[skip] ${subject}`);
+    } else if (/GALILEO QUEUE CAPTURE/i.test(subject)) {
+      const gq = require("../templates/galileo-queue");
+      const all = fs.existsSync(path.join(__dirname, "..", "templates", "galileo-queue.js")) ? gq.parseAll(email, helpers) : [];
+      const total = (email.body.match(/===== CAPTURE/g) || []).length;
+      for (const one of all) {
+        one.kind = "SCHEDULE_CHANGE"; one.confidence = 0.95; one.source = "template:galileo-queue-v1";
+        if (one.phone && one.pnr) await upsertBooking(agency.id, one, { mobile: one.phone });
+        await handleParsed(agency, one, subject, `${mid}#${one.pnr}`);
+      }
+      await logMail(agency.id, mid, subject, "queue-sweep", `${total} scanned, ${all.length} changes`);
+      await adminCard(`🧾 <b>QUEUE SWEEP</b> · 🏢 ${esc(agency.name)}\nScanned ${total} · changes ${all.length}`);
+    } else {
+      const parsed = await parseEmail(raw, { ai: Boolean(CFG.anthropicKey), apiKey: CFG.anthropicKey || undefined });
+      parsed._bodyMobile = extractClientMobile(email.body);
+      if ((parsed.confidence || 0) === 0 && !SUBJECT_HINTS.test(subject)) {
+        await logMail(agency.id, mid, subject, "skip", "airline mail, not booking-related");
+      } else {
+        await handleParsed(agency, parsed, subject, mid);
+      }
+    }
+}
+
 async function pollMailbox() {
   const client = new ImapFlow({ host: CFG.imapHost, port: CFG.imapPort, secure: true,
     auth: { user: CFG.imapUser, pass: CFG.imapPass }, logger: false });
@@ -494,46 +555,7 @@ async function pollMailbox() {
       const mid = item.mid;
       if (!msg || !msg.source) { console.log(`[skip] could not fetch uid ${uid} (${item.subject})`); continue; }
 
-      const raw = msg.source.toString("utf8");
-      const rawHead = raw.slice(0, raw.indexOf("\n\n") === -1 ? raw.length : raw.indexOf("\n\n"));
-      const subject = msg.envelope.subject || "(no subject)";
-      const email = splitEmail(raw);
-      // Passenger hint: airlines often address "PAX NAME <agency@mail>" in To:
-      email.toDisplayName = null; // To: display name is the agency contact (IndiGo), never the passenger
-      const pdfText = await extractPdfTexts(raw);
-      if (pdfText) {
-        email.body += "\n\n===PDF ATTACHMENT TEXT===\n" + pdfText;
-        console.log(`[pdf] extracted ${pdfText.length} chars from attachment(s)`);
-      }
-      const agency = resolveAgency(rawHead, email) || DEFAULT_AGENCY;
-      console.log(`[mail] (${agency?.slug}) ${subject}`);
-
-      if (GST_HINTS.test(subject)) {
-        await sb.from("gst_invoices").insert({ agency_id: agency.id, subject, invoice_ref: (subject.match(/[A-Z]{2}\d{6,}[A-Z0-9]*/)||[])[0]||null });
-        await logMail(agency.id, mid, subject, "gst");
-      } else if (!looksRelevant(email)) {
-        await logMail(agency.id, mid, subject, "skip");
-        console.log(`[skip] ${subject}`);
-      } else if (/GALILEO QUEUE CAPTURE/i.test(subject)) {
-        const gq = require("../templates/galileo-queue");
-        const all = fs.existsSync(path.join(__dirname, "..", "templates", "galileo-queue.js")) ? gq.parseAll(email, helpers) : [];
-        const total = (email.body.match(/===== CAPTURE/g) || []).length;
-        for (const one of all) {
-          one.kind = "SCHEDULE_CHANGE"; one.confidence = 0.95; one.source = "template:galileo-queue-v1";
-          if (one.phone && one.pnr) await upsertBooking(agency.id, one, { mobile: one.phone });
-          await handleParsed(agency, one, subject, `${mid}#${one.pnr}`);
-        }
-        await logMail(agency.id, mid, subject, "queue-sweep", `${total} scanned, ${all.length} changes`);
-        await adminCard(`🧾 <b>QUEUE SWEEP</b> · 🏢 ${esc(agency.name)}\nScanned ${total} · changes ${all.length}`);
-      } else {
-        const parsed = await parseEmail(raw, { ai: Boolean(CFG.anthropicKey), apiKey: CFG.anthropicKey || undefined });
-        parsed._bodyMobile = extractClientMobile(email.body);
-        if ((parsed.confidence || 0) === 0 && !SUBJECT_HINTS.test(subject)) {
-          await logMail(agency.id, mid, subject, "skip", "airline mail, not booking-related");
-        } else {
-          await handleParsed(agency, parsed, subject, mid);
-        }
-      }
+      await processRaw(msg.source.toString("utf8"), mid, msg.envelope.subject || "(no subject)");
       await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });
     }
   } finally {
@@ -542,22 +564,136 @@ async function pollMailbox() {
   }
 }
 
+// ---------- Gmail (Sign in with Google) ----------
+const accessCache = new Map(); // agencyId -> { token, exp }
+async function gmailAccess(a) {
+  const c = accessCache.get(a.id);
+  if (c && c.exp > Date.now() + 60000) return c.token;
+  const t = await gmail.refreshAccess(a.gmail_refresh_token);
+  accessCache.set(a.id, { token: t.access_token, exp: Date.now() + (t.expires_in || 3600) * 1000 });
+  return t.access_token;
+}
+async function gmailFail(a, e) {
+  console.error(`[gmail-error] ${a.slug}: ${e.message}`);
+  if (/invalid_grant|unauthorized|401/i.test(e.message)) {
+    await sb.from("agencies").update({ gmail_error: e.message }).eq("id", a.id);
+    await adminCard(`⚠️ <b>GMAIL DISCONNECTED</b> · 🏢 ${esc(a.name)} (${esc(a.gmail_email || "")})\n${esc(e.message)}\nAgency must reconnect from aviolink.in`);
+  }
+}
+// Mails the agent SENT are never read (-from:me), spam IS read (airline mails land there), trash is not.
+const GMAIL_LIVE_Q = "newer_than:3d -from:me -in:trash -in:chats";
+async function pollGmail() {
+  for (const a of AGENCIES.filter((x) => x.gmail_refresh_token && x.gmail_backfill_status !== "running")) {
+    try {
+      const access = await gmailAccess(a);
+      const ids = await gmail.listIds(access, GMAIL_LIVE_Q, 300);
+      if (!ids.length) continue;
+      const mids = ids.map((id) => `gm-${id}`);
+      const { data: known } = await sb.from("mail_log").select("message_id").in("message_id", mids);
+      const knownSet = new Set((known || []).map((r) => r.message_id));
+      const fresh = ids.filter((id) => !knownSet.has(`gm-${id}`));
+      if (fresh.length) console.log(`[gmail] ${a.slug}: ${ids.length} in window, ${fresh.length} new`);
+      for (const id of fresh) {
+        const raw = await gmail.getRaw(access, id);
+        const subject = (raw.match(/^Subject:\s*(.*)$/im) || [])[1] || "(no subject)";
+        await processRaw(raw, `gm-${id}`, splitEmail(raw).subject || subject, a);
+      }
+    } catch (e) { await gmailFail(a, e); }
+  }
+}
+// First connect: read up to 12 months of ticket mails so every future alert has passenger names.
+const BACKFILL_Q = 'newer_than:365d -from:me -in:trash (subject:(ticket OR e-ticket OR eticket OR itinerary OR PNR OR "booking confirmation" OR "booking confirmed" OR "booking reference" OR "flight confirmation" OR "reservation confirmed" OR "travel itinerary" OR "e-ticket receipt" OR "electronic ticket" OR "ticket confirmation" OR "trip details" OR "flight details"))';
+async function runBackfills() {
+  for (const a of AGENCIES.filter((x) => x.gmail_refresh_token && x.gmail_backfill_status === "pending")) {
+    await sb.from("agencies").update({ gmail_backfill_status: "running" }).eq("id", a.id);
+    a.gmail_backfill_status = "running";
+    let tickets = 0, scanned = 0;
+    try {
+      const access = await gmailAccess(a);
+      const ids = await gmail.listIds(access, BACKFILL_Q, 600);
+      const mids = ids.map((id) => `gm-${id}`);
+      const { data: known } = await sb.from("mail_log").select("message_id").in("message_id", mids);
+      const knownSet = new Set((known || []).map((r) => r.message_id));
+      await adminCard(`📚 <b>BACKFILL STARTED</b> · 🏢 ${esc(a.name)}\n${ids.length} ticket-like mails in last 12 months`);
+      for (const id of ids) {
+        if (knownSet.has(`gm-${id}`)) continue;
+        scanned++;
+        try {
+          const raw = await gmail.getRaw(access, id);
+          const ok = await processRaw(raw, `gm-${id}`, splitEmail(raw).subject || "(no subject)", a, { bookingsOnly: true });
+          if (ok) tickets++;
+        } catch (e) { console.error("[backfill-item]", e.message); }
+      }
+      await sb.from("agencies").update({ gmail_backfill_status: "done" }).eq("id", a.id);
+      a.gmail_backfill_status = "done";
+      await adminCard(`📚 <b>BACKFILL DONE</b> · 🏢 ${esc(a.name)}\n${tickets} bookings saved from ${scanned} mails`);
+    } catch (e) {
+      await sb.from("agencies").update({ gmail_backfill_status: "error" }).eq("id", a.id);
+      a.gmail_backfill_status = "error";
+      await gmailFail(a, e);
+    }
+  }
+}
+
+// ---------- HTTP: OAuth callback + health ----------
+function startHttp() {
+  const port = Number(process.env.PORT || 8080);
+  const site = (process.env.SITE_URL || "https://aviolink.in").replace(/\/$/, "");
+  http.createServer(async (req, res) => {
+    const u = new URL(req.url, "http://x");
+    try {
+      if (u.pathname === "/health") { res.writeHead(200, { "content-type": "text/plain" }); return res.end("ok"); }
+      if (u.pathname === "/auth/google") {
+        const agencyId = u.searchParams.get("agency") || "";
+        if (!gmail.enabled()) { res.writeHead(503); return res.end("Google sign-in not configured"); }
+        if (!/^[0-9a-f-]{36}$/i.test(agencyId)) { res.writeHead(400); return res.end("missing agency"); }
+        res.writeHead(302, { location: gmail.authUrl(agencyId) }); return res.end();
+      }
+      if (u.pathname === "/auth/google/callback") {
+        const agencyId = gmail.verifyState(u.searchParams.get("state"));
+        const code = u.searchParams.get("code");
+        if (!agencyId || !code) { res.writeHead(302, { location: `${site}/?connected=error` }); return res.end(); }
+        const tok = await gmail.exchangeCode(code);
+        if (!tok.refresh_token) { res.writeHead(302, { location: `${site}/?connected=error&why=norefresh` }); return res.end(); }
+        const prof = await gmail.profile(tok.access_token);
+        const { error } = await sb.from("agencies").update({
+          gmail_email: prof.emailAddress, gmail_refresh_token: tok.refresh_token,
+          gmail_connected_at: new Date().toISOString(), gmail_backfill_status: "pending", gmail_error: null,
+        }).eq("id", agencyId);
+        if (error) throw error;
+        accessCache.delete(agencyId);
+        await loadAgencies();
+        const a = AGENCIES.find((x) => x.id === agencyId);
+        await adminCard(`🔗 <b>GMAIL CONNECTED</b> · 🏢 ${esc(a?.name || agencyId)}\n${esc(prof.emailAddress)} — backfill starting`);
+        res.writeHead(302, { location: `${site}/?connected=${encodeURIComponent(prof.emailAddress)}` }); return res.end();
+      }
+      res.writeHead(404); res.end("not found");
+    } catch (e) {
+      console.error("[http-error]", e.message);
+      res.writeHead(302, { location: `${site}/?connected=error` }); res.end();
+    }
+  }).listen(port, () => console.log(`[http] listening on ${port}${gmail.enabled() ? " — Google sign-in ON" : " — Google sign-in OFF (set GOOGLE_CLIENT_ID/SECRET/PUBLIC_URL)"}`));
+}
+
 // ---------- main ----------
 (async () => {
   await loadAgencies();
   if (!DEFAULT_AGENCY) { console.error("No agencies in DB — run the schema SQL."); process.exit(1); }
-  await tg("sendMessage", { chat_id: CFG.tgChat, text: `☁️ FlightAlert worker v2 — ${AGENCIES.length} agencies loaded, watching ${CFG.imapUser}` });
+  await tg("sendMessage", { chat_id: CFG.tgChat, text: `☁️ FlightAlert worker v3 — ${AGENCIES.length} agencies, ${AGENCIES.filter((a)=>a.gmail_refresh_token).length} Gmail-connected, watching ${CFG.imapUser}` });
   const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`poll timed out after ${ms / 1000}s`)), ms))]);
   let polling = false;
   const mailLoop = async () => {
     if (polling) { console.log("[poll] previous cycle still running, skipping"); setTimeout(mailLoop, CFG.pollSeconds * 1000); return; }
     polling = true;
     try { await withTimeout(pollMailbox(), 300000); } catch (e) { console.error("[mail-error]", e.message); }
+    if (gmail.enabled()) { try { await withTimeout(pollGmail(), 300000); } catch (e) { console.error("[gmail-loop]", e.message); } }
     polling = false;
     setTimeout(mailLoop, CFG.pollSeconds * 1000);
   };
   const tgLoop = async () => { try { await pollTelegram(); } catch (e) { console.error("[tg-error]", e.message); } setTimeout(tgLoop, 3000); };
   const agLoop = async () => { try { await loadAgencies(); await sendWelcomes(); } catch (_) {} setTimeout(agLoop, 120000); };
+  const bfLoop = async () => { if (gmail.enabled()) { try { await runBackfills(); } catch (e) { console.error("[backfill-loop]", e.message); } } setTimeout(bfLoop, 60000); };
   sendWelcomes().catch(()=>{});
-  mailLoop(); tgLoop(); setTimeout(agLoop, 120000);
+  startHttp();
+  mailLoop(); tgLoop(); setTimeout(agLoop, 120000); setTimeout(bfLoop, 15000);
 })();

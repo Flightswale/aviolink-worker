@@ -145,7 +145,7 @@ Respond ONLY with a JSON object, no markdown fences, matching exactly:
 "flight":string|null,"date":"YYYY-MM-DD"|null,"dep":"HH:MM"|null,"arr":"HH:MM"|null,
 "old":{"flight":string|null,"date":"YYYY-MM-DD"|null,"dep":"HH:MM"|null,"arr":"HH:MM"|null}|null,
 "new":{"flight":string|null,"date":"YYYY-MM-DD"|null,"dep":"HH:MM"|null,"arr":"HH:MM"|null}|null}],
-"actionDeadline":"YYYY-MM-DD"|null}
+"actionDeadline":"YYYY-MM-DD"|null,"paxCount":number|null}
 
 CRITICAL AIRLINE-DOMAIN RULES:
 1. pnr = the AIRLINE PNR / record locator: 5-7 alphanumeric chars (e.g. 8AYCHU, KEBDPW). NEVER a vendor/agency reference like CT1457860, FBB7SVA7, booking ids, or ticket numbers. If both appear, always pick the 5-7 char airline PNR.
@@ -155,7 +155,8 @@ CRITICAL AIRLINE-DOMAIN RULES:
 5. kind=TICKET for itineraries/e-tickets (fill flight/date/dep/arr per segment; old/new null). kind=SCHEDULE_CHANGE for changes/cancellations.
 6. Dates ISO YYYY-MM-DD (GDS date like 18SEP = next occurrence of that date). Times 24h HH:MM. Sector XXX-YYY IATA. Unknown fields null.
 7. If the mail is not about a flight booking or change at all, return {"kind":null}.
-8. VOLUNTARY vs INVOLUNTARY: alerts are ONLY for AIRLINE-INITIATED changes. If the mail shows the change/cancellation was REQUESTED by the travel agency or passenger (e.g. "as per your request", "your cancellation request", refund confirmations, reissue requests, replies to an agency's own mail asking for a change), return {"kind":null}. The quoted thread below a supplier reply often reveals who initiated it.
+8. ALL FLIGHTS: for a schedule change, list EVERY flight on the booking in order (changed AND unchanged). Unchanged flights: status "UNCHANGED" with identical old and new. A next-day arrival marked like "#0515" means arr "05:15" with arrDayOffset 1 — add "arrDayOffset":1 inside that old/new object. paxCount = total passengers if the mail says "+1", "2 pax", etc.
+9. VOLUNTARY vs INVOLUNTARY: alerts are ONLY for AIRLINE-INITIATED changes. If the mail shows the change/cancellation was REQUESTED by the travel agency or passenger (e.g. "as per your request", "your cancellation request", refund confirmations, reissue requests, replies to an agency's own mail asking for a change), return {"kind":null}. The quoted thread below a supplier reply often reveals who initiated it.
 
 EXAMPLE: line "3 EW3049 E 18SEP 5 CDGPRG UN2 2015 2200" in a schedule-change mail with PNR 8AYCHU =>
 {"kind":"SCHEDULE_CHANGE","pnr":"8AYCHU","airline":"EW","changeType":"CANCELLATION","passengers":[...],

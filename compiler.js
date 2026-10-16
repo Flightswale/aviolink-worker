@@ -35,32 +35,36 @@ function compile(parsed, agency = {}) {
 
   // Passenger FIRST — the anchor when scanning many alerts
   const pax = (parsed.passengers || []).map(titleCase);
-  if (pax.length === 1) L.push(`👤 *Passenger:* ${pax[0]}`);
-  else if (pax.length > 1) { L.push(`👤 *Passengers:*`); pax.forEach((p)=>L.push(`   • ${p}`)); }
-  else L.push(`👤 *Passenger:* (see booking)`);
+  const extra = parsed.paxCount && parsed.paxCount > pax.length ? ` + ${parsed.paxCount - pax.length}` : "";
+  if (pax.length === 1) L.push(`👤 *Passenger:* ${pax[0]}${extra}`);
+  else if (pax.length > 1) { L.push(`👤 *Passengers:*`); pax.forEach((p)=>L.push(`   • ${p}`)); if (extra) L.push(`   • and${extra} more`); }
+  else L.push(`👤 *Passenger:* (see booking)${extra}`);
   L.push(`🎫 *PNR:* ${parsed.pnr || "check original mail"}`);
   if (parsed.airline) L.push(`✈️ *Airline:* ${parsed.airline}`);
   L.push("");
 
   const segs = parsed.segments || [];
-  segs.forEach((s, i) => {
-    if (segs.length > 1) L.push(`*── Flight ${i + 1} ──*`);
-    if (s.sector) L.push(`📍 *Sector:* ${sectorArrow(s.sector)}`);
-    const dateLine = s.old && s.old.date ? fmtDate(s.old.date) : null;
-    if (dateLine) L.push(`📅 *Date:* ${dateLine}`);
-    const oldKnown = s.old && (s.old.dep || s.old.arr || s.status === "CANCELLED");
-    const times = (x) => (x.dep ? `Dep ${x.dep}` : "") + (x.arr ? `${x.dep ? " — " : ""}Arr ${x.arr}` : "");
-    if (oldKnown) {
-      L.push(`❌ *${s.status === "CANCELLED" ? "Cancelled" : "Old timing"}:* ${s.old.flight || ""}`);
-      if (times(s.old)) L.push(`   ${times(s.old)}`);
-    }
-    if (s.new) {
-      L.push(`${oldKnown ? "✅ *New timing:*" : "🕒 *Revised timing:*"} ${s.new.flight || ""}`);
-      if (times(s.new)) L.push(`   ${times(s.new)}`);
-      if (s.new.date && s.old && s.old.date && s.new.date !== s.old.date) L.push(`   (now on ${fmtDate(s.new.date)})`);
-    }
+  const t = (x) => x ? `${x.dep || "--:--"} – ${x.arr || "--:--"}${x.arrDayOffset ? " (+" + x.arrDayOffset + ")" : ""}` : "";
+  const line = (s, leg, mark) => `${leg.flight || s.sector || "Flight"} · ${fmtDateShort(leg.date)} · ${sectorArrow(s.sector)} · ${mark ? "*" + t(leg) + "*" : t(leg)}${mark ? " ⬅️" : ""}`;
+  const hasAnyOld = segs.some((s) => s.old && (s.old.dep || s.old.arr));
+  const changedIdx = new Set(segs.map((s, i) => (s.status !== "UNCHANGED" && s.new && s.old && (s.old.dep !== s.new.dep || s.old.arr !== s.new.arr || s.old.date !== s.new.date || s.old.flight !== s.new.flight)) ? i : -1).filter((i) => i >= 0));
+
+  if (cancelled) {
+    segs.forEach((s) => {
+      if (s.old) L.push(`❌ *Cancelled:* ${line(s, s.old, false)}`);
+      if (s.new) L.push(`✅ *Alternate:* ${line(s, s.new, false)}`);
+    });
     L.push("");
-  });
+  } else {
+    if (hasAnyOld) {
+      L.push("*Old timings*");
+      segs.forEach((s) => { if (s.old) L.push(line(s, s.old, false)); });
+      L.push("");
+    }
+    L.push(hasAnyOld ? "*New timings*" : "*Revised timings*");
+    segs.forEach((s, i) => { const leg = s.new || s.old; if (leg) L.push(line(s, leg, changedIdx.has(i))); });
+    L.push("");
+  }
 
   L.push("━━━━━━━━━━━━━━━");
   if (cancelled && !anyNew) {

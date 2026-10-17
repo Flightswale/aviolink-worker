@@ -113,8 +113,13 @@ async function sendWhatsApp(toMobile, text) {
 let AGENCIES = [];
 let DEFAULT_AGENCY = null;
 async function loadAgencies() {
-  const { data, error } = await sb.from("agencies")
-    .select("id,name,slug,plan,trial_ends_at,notify_email,owner_phone,whatsapp,forward_sources,telegram_chat_id,alerts_email,gmail_email,gmail_refresh_token,gmail_backfill_status");
+  const BASE = "id,name,slug,plan,trial_ends_at,notify_email,owner_phone,whatsapp,forward_sources,telegram_chat_id,alerts_email";
+  let { data, error } = await sb.from("agencies").select(BASE + ",gmail_email,gmail_refresh_token,gmail_backfill_status");
+  if (error && /gmail_/.test(error.message)) {
+    // Gmail columns not created yet (gmail-patch.sql not run) — keep working without Gmail.
+    console.error("[agencies] gmail columns missing — run gmail-patch.sql in Supabase; continuing without Gmail");
+    ({ data, error } = await sb.from("agencies").select(BASE));
+  }
   if (error) { console.error("[agencies-error]", error.message); return; }
   AGENCIES = data || [];
   DEFAULT_AGENCY = AGENCIES.find((a) => a.slug === CFG.agencySlug) || AGENCIES[0] || null;

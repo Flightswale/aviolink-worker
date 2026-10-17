@@ -667,7 +667,13 @@ function startHttp() {
       if (u.pathname === "/auth/google/callback") {
         const agencyId = gmail.verifyState(u.searchParams.get("state"));
         const code = u.searchParams.get("code");
-        if (!agencyId || !code) return page("Not connected", "Google sign-in was cancelled or failed. Please open the link again.");
+        if (!agencyId || !code) {
+          const why = u.searchParams.get("error") || (!u.searchParams.get("state") ? "no state (page opened directly?)" : !agencyId ? "state check failed" : "no code");
+          console.log(`[oauth] callback failed: ${why} | query=${u.search.slice(0, 200)}`);
+          await adminCard(`⚠️ <b>GMAIL CONNECT FAILED</b>
+Reason: ${esc(why)}`);
+          return page("Not connected", `Google sign-in did not complete.<br><b>Reason:</b> ${esc(why)}<br><br>Please open the connect link again.`);
+        }
         const tok = await gmail.exchangeCode(code);
         if (!tok.refresh_token) return page("Not connected", "Google did not give offline access. Please open the link again and click Allow.");
         const prof = await gmail.profile(tok.access_token);

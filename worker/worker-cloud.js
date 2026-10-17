@@ -640,6 +640,24 @@ async function runBackfills() {
   }
 }
 
+
+const LEGAL_CSS = `<meta name=viewport content="width=device-width,initial-scale=1"><style>body{font-family:system-ui;max-width:760px;margin:40px auto;padding:0 18px;color:#1f2937;line-height:1.6}h1{color:#1E2761}h2{color:#1E2761;font-size:1.1rem;margin-top:26px}</style>`;
+const PRIVACY_HTML = `<!doctype html><title>Privacy Policy — Aviolink</title>${LEGAL_CSS}
+<h1>Aviolink FlightAlert — Privacy Policy</h1><p>Last updated: 17 October 2026. Operated by Finch Travels, Pune, India (support@aviolink.in, +91 9503255845).</p>
+<h2>What we access</h2><p>When a travel agency connects its mailbox using "Sign in with Google", Aviolink receives read-only access (Gmail scope <code>gmail.readonly</code>). We never send, delete or modify mail, and we never see the account password.</p>
+<h2>What we use it for</h2><p>Solely to detect airline and travel-vendor emails — e-tickets, itineraries, schedule changes, delays and cancellations — and turn them into flight-change alerts for that agency. Other emails are skipped automatically and their content is not stored.</p>
+<h2>What we store</h2><p>From relevant airline mails only: PNR, airline, flight numbers, dates and timings, passenger names and contact number when present, and the alert text. We also store the message ID and subject to avoid processing a mail twice. Data is stored in an encrypted database (Supabase, India region) and is used only to provide the service to that agency.</p>
+<h2>Sharing</h2><p>We do not sell or share Gmail data with anyone. Alerts are delivered only to the agency and, when the agency approves, to its own passenger on WhatsApp. Email content may be processed by an AI model provider (Anthropic) solely to extract flight details; it is not used to train models.</p>
+<h2>Google API Services User Data Policy</h2><p>Aviolink's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+<h2>Your control</h2><p>You can disconnect at any time at <a href="https://myaccount.google.com/connections">myaccount.google.com/connections</a>. On request to support@aviolink.in we delete all your stored data within 7 days.</p>`;
+const TERMS_HTML = `<!doctype html><title>Terms of Service — Aviolink</title>${LEGAL_CSS}
+<h1>Aviolink FlightAlert — Terms of Service</h1><p>Last updated: 17 October 2026. Provider: Finch Travels, Pune, India (support@aviolink.in).</p>
+<h2>Service</h2><p>Aviolink reads airline and vendor emails from mailboxes you connect and alerts you about flight schedule changes and cancellations. Alerts are an aid; the airline's own communication remains authoritative and you remain responsible for verifying changes with the airline or GDS.</p>
+<h2>Trial and fees</h2><p>New agencies get a 30-day free trial. Paid plans are billed as published on aviolink.in; you may cancel anytime.</p>
+<h2>Acceptable use</h2><p>Connect only mailboxes you are authorised to use. Do not use the service for unlawful purposes.</p>
+<h2>Liability</h2><p>The service is provided "as is". To the extent permitted by law, our liability is limited to the fees you paid in the last 3 months.</p>
+<h2>Data</h2><p>See our <a href="/privacy">Privacy Policy</a>. Disconnecting your mailbox stops all access immediately.</p>`;
+
 // ---------- HTTP: OAuth callback + health ----------
 function startHttp() {
   const port = Number(process.env.PORT || 8080);
@@ -647,6 +665,10 @@ function startHttp() {
   http.createServer(async (req, res) => {
     const u = new URL(req.url, "http://x");
     try {
+      if (u.pathname === "/privacy" || u.pathname === "/terms") {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        return res.end(u.pathname === "/privacy" ? PRIVACY_HTML : TERMS_HTML);
+      }
       if (u.pathname === "/health") { res.writeHead(200, { "content-type": "text/plain" }); return res.end("ok"); }
       const page = (title, msg) => { res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         return res.end(`<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>Aviolink</title><body style="font-family:system-ui;background:#eef2fb;display:grid;place-items:center;min-height:100vh;margin:0"><div style="background:#fff;padding:32px;border-radius:14px;max-width:420px;text-align:center;box-shadow:0 8px 30px rgba(30,39,97,.15)"><h2 style="color:#1E2761">${title}</h2><p style="color:#374151;line-height:1.5">${msg}</p></div>`); };

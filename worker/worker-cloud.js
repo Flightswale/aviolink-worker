@@ -655,7 +655,7 @@ function startHttp() {
       if (cm) {
         if (!gmail.enabled()) return page("Not ready", "Google sign-in is not configured yet.");
         const a = AGENCIES.find((x) => x.slug === cm[1]);
-        if (!a) return page("Unknown agency", `No agency called “${esc(cm[1])}”.`);
+        if (!a) return page("Unknown agency", `No agency called “${esc(cm[1])}”. Pick one:<br><br>${AGENCIES.map((x) => `<a href="/connect/${x.slug}">${esc(x.name)}</a>${x.gmail_email ? " ✅ " + esc(x.gmail_email) : ""}`).join("<br>")}`);
         res.writeHead(302, { location: gmail.authUrl(a.id) }); return res.end();
       }
       if (u.pathname === "/auth/google") {

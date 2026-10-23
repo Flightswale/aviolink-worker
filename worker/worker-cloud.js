@@ -188,6 +188,16 @@ async function pollTelegram() {
     tgOffset = u.update_id + 1;
     // /retest PNR  -> forget this PNR's recent mails + alerts so the next poll re-reads them (no re-forwarding needed)
     const txt = (u.message?.text || "").trim();
+    if (txt.startsWith("/status")) {
+      const ago = (t) => t ? `${Math.round((Date.now() - t) / 60000)} min ago` : "never";
+      const rows = AGENCIES.map((a) => {
+        const h = GMAIL_HEALTH.get(a.id) || {};
+        if (!a.gmail_refresh_token) return `🏢 ${a.name}: Gmail not connected (forwarding only)`;
+        return `🏢 ${a.name} — ${a.gmail_email}\n   last read OK: ${ago(h.okAt)} · mails in 3-day window: ${h.seen ?? "?"}\n   backfill: ${a.gmail_backfill_status || "-"}${h.err ? `\n   last error (${ago(h.errAt)}): ${String(h.err).slice(0, 200)}` : ""}`;
+      }).join("\n\n");
+      await tg("sendMessage", { chat_id: u.message.chat.id, text: `📊 Status\nGoogle sign-in: ${gmail.enabled() ? "ON" : "OFF"}\n\n${rows}` });
+      continue;
+    }
     if (txt.startsWith("/retest")) {
       const pnr = (txt.split(/\s+/)[1] || "").toUpperCase();
       if (!/^[A-Z0-9]{5,7}$/.test(pnr)) { await tg("sendMessage", { chat_id: u.message.chat.id, text: "Usage: /retest PNR" }); continue; }
@@ -487,7 +497,8 @@ async function processRaw(raw, mid, subject, forcedAgency = null, opts = {}) {
     }
     const agency = forcedAgency || resolveAgency(rawHead, email) || DEFAULT_AGENCY;
     console.log(`[mail] (${agency?.slug}) ${subject}`);
-    if (!forcedAgency && agency.gmail_refresh_token && gmail.enabled()) {
+    const gh = GMAIL_HEALTH.get(agency.id);
+    if (!forcedAgency && agency.gmail_refresh_token && gmail.enabled() && gh && gh.okAt && Date.now() - gh.okAt < 600000) {
       // This agency's Gmail is read directly — a forwarded copy would only create duplicates.
       await logMail(agency.id, mid, subject, "skip", "agency reads Gmail directly");
       return;
@@ -572,6 +583,7 @@ async function pollMailbox() {
 
 // ---------- Gmail (Sign in with Google) ----------
 const accessCache = new Map(); // agencyId -> { token, exp }
+const GMAIL_HEALTH = new Map(); // agencyId -> { okAt, seen, fresh, errAt, err }
 async function gmailAccess(a) {
   const c = accessCache.get(a.id);
   if (c && c.exp > Date.now() + 60000) return c.token;
@@ -582,6 +594,7 @@ async function gmailAccess(a) {
 const gmailErrAt = new Map();
 async function gmailFail(a, e) {
   console.error(`[gmail-error] ${a.slug}: ${e.message}`);
+  { const h = GMAIL_HEALTH.get(a.id) || {}; h.errAt = Date.now(); h.err = e.message; GMAIL_HEALTH.set(a.id, h); }
   if (!/invalid_grant|unauthorized|401/i.test(e.message) && Date.now() - (gmailErrAt.get(a.id) || 0) > 3600000) {
     gmailErrAt.set(a.id, Date.now());
     await adminCard(`⚠️ <b>GMAIL READ ERROR</b> · 🏢 ${esc(a.name)}\n${esc(e.message).slice(0, 300)}`);
@@ -598,6 +611,7 @@ async function pollGmail() {
     try {
       const access = await gmailAccess(a);
       const ids = await gmail.listIds(access, GMAIL_LIVE_Q, 300);
+      const h = GMAIL_HEALTH.get(a.id) || {}; h.seen = ids.length; h.okAt = Date.now(); GMAIL_HEALTH.set(a.id, h);
       if (!ids.length) continue;
       const mids = ids.map((id) => `gm-${id}`);
       const { data: known } = await sb.from("mail_log").select("message_id").in("message_id", mids);

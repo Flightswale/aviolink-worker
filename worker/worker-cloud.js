@@ -200,7 +200,7 @@ async function pollTelegram() {
     }
     if (txt.startsWith("/retest")) {
       const pnr = (txt.split(/\s+/)[1] || "").toUpperCase();
-      if (!/^[A-Z0-9]{5,7}$/.test(pnr)) { await tg("sendMessage", { chat_id: u.message.chat.id, text: "Usage: /retest PNR" }); continue; }
+      if (!/^[A-Z0-9]{5,15}$/.test(pnr)) { await tg("sendMessage", { chat_id: u.message.chat.id, text: "Usage: /retest PNR  (or booking / order number)" }); continue; }
       const since = new Date(Date.now() - 3 * 86400000).toISOString();
       const { data: logs } = await sb.from("mail_log").select("id,subject,verdict,detail,message_id").gte("created_at", since)
         .or(`subject.ilike.%${pnr}%,detail.ilike.%${pnr}%`);

@@ -188,6 +188,7 @@ async function pollTelegram() {
     tgOffset = u.update_id + 1;
     // /retest PNR  -> forget this PNR's recent mails + alerts so the next poll re-reads them (no re-forwarding needed)
     const txt = (u.message?.text || "").trim();
+    if (txt.startsWith("/report")) { await nightlyReport(true); continue; }
     if (txt.startsWith("/status")) {
       const ago = (t) => t ? `${Math.round((Date.now() - t) / 60000)} min ago` : "never";
       const rows = AGENCIES.map((a) => {
@@ -519,8 +520,9 @@ async function processRaw(raw, mid, subject, forcedAgency = null, opts = {}) {
     if (GST_HINTS.test(subject)) {
       await sb.from("gst_invoices").insert({ agency_id: agency.id, subject, invoice_ref: (subject.match(/[A-Z]{2}\d{6,}[A-Z0-9]*/)||[])[0]||null });
       await logMail(agency.id, mid, subject, "gst");
-    } else if (!looksRelevant(email)) {
-      await logMail(agency.id, mid, subject, "skip");
+    } else if (!looksRelevant(email) && (NEGATIVE_HINTS.test(subject) || !(await aiSaysTravel(email)))) {
+      const sender = ((email.from || "").match(/@([^>\s]+)/) || [])[1] || "";
+      await logMail(agency.id, mid, subject, "skip", `${NEGATIVE_HINTS.test(subject) ? "rule: promo/otp/check-in" : "rules+AI: not travel"} | ${sender}`);
       console.log(`[skip] ${subject}`);
     } else if (/GALILEO QUEUE CAPTURE/i.test(subject)) {
       const gq = require("../templates/galileo-queue");
@@ -678,6 +680,58 @@ const TERMS_HTML = `<!doctype html><title>Terms of Service — Aviolink</title>$
 <h2>Liability</h2><p>The service is provided "as is". To the extent permitted by law, our liability is limited to the fees you paid in the last 3 months.</p>
 <h2>Data</h2><p>See our <a href="/privacy">Privacy Policy</a>. Disconnecting your mailbox stops all access immediately.</p>`;
 
+
+// ---------- AI safety net: second opinion before any mail is skipped ----------
+async function aiSaysTravel(email) {
+  if (!CFG.anthropicKey) return false;
+  try {
+    const headers = { "content-type": "application/json", "x-api-key": CFG.anthropicKey, "anthropic-version": "2023-06-01" };
+    if (process.env.ANTHROPIC_WORKSPACE_ID) headers["anthropic-workspace-id"] = process.env.ANTHROPIC_WORKSPACE_ID;
+    const res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: JSON.stringify({
+      model: process.env.ANTHROPIC_CLASSIFY_MODEL || "claude-haiku-4-5-20251001", max_tokens: 5,
+      system: "You classify emails received by a travel agency. Answer YES if the email is from an airline, GDS, travel consolidator, OTA or booking vendor AND is about a specific flight booking: an e-ticket / booking confirmation / itinerary, or a schedule change, time change, delay, cancellation, rebooking or re-accommodation of a flight. Answer NO for marketing, newsletters, OTPs, check-in reminders, boarding passes, invoices, payment receipts, refunds the agency requested, and anything not about a specific flight. Any language. Answer exactly YES or NO.",
+      messages: [{ role: "user", content: `FROM: ${email.from}\nSUBJECT: ${email.subject}\n\n${(email.body || "").slice(0, 3000)}` }] }) });
+    if (!res.ok) { console.error("[ai-safety] HTTP", res.status); return false; }
+    const d = await res.json();
+    const yes = /^\s*yes/i.test(d.content?.[0]?.text || "");
+    if (yes) console.log(`[ai-safety] rescued: ${email.subject}`);
+    return yes;
+  } catch (e) { console.error("[ai-safety]", e.message); return false; }
+}
+
+// ---------- watchdog + nightly report ----------
+const STARTED_AT = Date.now();
+const watchdogWarned = new Map();
+async function watchdog() {
+  if (!gmail.enabled() || Date.now() - STARTED_AT < 15 * 60000) return;
+  for (const a of AGENCIES.filter((x) => x.gmail_refresh_token)) {
+    const h = GMAIL_HEALTH.get(a.id) || {};
+    if (!h.okAt || Date.now() - h.okAt > 15 * 60000) {
+      if (Date.now() - (watchdogWarned.get(a.id) || 0) > 3600000) {
+        watchdogWarned.set(a.id, Date.now());
+        await adminCard(`🚨 <b>GMAIL NOT READ FOR 15+ MIN</b> · 🏢 ${esc(a.name)} (${esc(a.gmail_email)})\\nLast OK: ${h.okAt ? new Date(h.okAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" }) : "never since restart"}${h.err ? "\\nError: " + esc(String(h.err).slice(0, 200)) : ""}`);
+      }
+    }
+  }
+}
+let lastReportDay = "";
+async function nightlyReport(force = false) {
+  const ist = new Date(Date.now() + 5.5 * 3600000);
+  const day = ist.toISOString().slice(0, 10);
+  if (!force && (ist.getUTCHours() !== 21 || lastReportDay === day)) return;
+  lastReportDay = day;
+  const since = new Date(Date.now() - 86400000).toISOString();
+  const { data: rows } = await sb.from("mail_log").select("agency_id,subject,verdict,detail").gte("created_at", since).limit(5000);
+  const R = rows || [];
+  const n = (v) => R.filter((r) => r.verdict === v).length;
+  const airlineSkips = R.filter((r) => r.verdict === "skip" && /rules\+AI/.test(r.detail || "") && (AIRLINE_SENDER.test("@" + String(r.detail).split("| ")[1]) || AIRLINE_HINTS.test(r.detail || "")));
+  const { count: alerts } = await sb.from("alerts").select("id", { count: "exact", head: true }).gte("created_at", since);
+  let msg = `📋 <b>DAILY REPORT</b> · last 24 h\\nMails read: ${R.length}\\n🎫 Tickets saved: ${n("ticket")}\\n⚡ Change mails: ${n("change")} · alerts created: ${alerts ?? "?"}\\n🔍 Unrecognised: ${n("review")} · duplicates silenced: ${n("dup")}\\n⏭ Skipped: ${n("skip")}`;
+  msg += airlineSkips.length ? `\\n\\n⚠️ <b>Airline-sender mails skipped — please glance:</b>\\n` + airlineSkips.slice(0, 15).map((r) => "• " + esc(String(r.subject).slice(0, 80))).join("\\n") : "\\n\\n✅ No airline-sender mail was skipped.";
+  for (const a of AGENCIES.filter((x) => x.gmail_refresh_token)) { const h = GMAIL_HEALTH.get(a.id) || {}; msg += `\\n\\n📬 ${esc(a.name)}: Gmail last read ${h.okAt ? Math.round((Date.now() - h.okAt) / 60000) + " min ago" : "never"}`; }
+  await adminCard(msg);
+}
+
 // ---------- HTTP: OAuth callback + health ----------
 function startHttp() {
   const port = Number(process.env.PORT || 8080);
@@ -765,6 +819,8 @@ Reason: ${esc(why)}`);
   };
   const tgLoop = async () => { try { await pollTelegram(); } catch (e) { console.error("[tg-error]", e.message); } setTimeout(tgLoop, 3000); };
   const agLoop = async () => { try { await loadAgencies(); await sendWelcomes(); } catch (_) {} setTimeout(agLoop, 120000); };
+  const wdLoop = async () => { try { await watchdog(); await nightlyReport(); } catch (e) { console.error("[watchdog]", e.message); } setTimeout(wdLoop, 60000); };
+  setTimeout(wdLoop, 60000);
   const bfLoop = async () => { if (gmail.enabled()) { try { await runBackfills(); } catch (e) { console.error("[backfill-loop]", e.message); } } setTimeout(bfLoop, 60000); };
   sendWelcomes().catch(()=>{});
   startHttp();

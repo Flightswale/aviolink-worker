@@ -601,7 +601,7 @@ async function pollGmail() {
       const mids = ids.map((id) => `gm-${id}`);
       const { data: known } = await sb.from("mail_log").select("message_id").in("message_id", mids);
       const knownSet = new Set((known || []).map((r) => r.message_id));
-      const fresh = ids.filter((id) => !knownSet.has(`gm-${id}`));
+      const fresh = ids.filter((id) => !knownSet.has(`gm-${id}`)).reverse(); // oldest first: ticket before its change notice
       if (fresh.length) console.log(`[gmail] ${a.slug}: ${ids.length} in window, ${fresh.length} new`);
       for (const id of fresh) {
         const raw = await gmail.getRaw(access, id);

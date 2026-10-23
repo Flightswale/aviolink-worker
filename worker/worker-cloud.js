@@ -192,13 +192,14 @@ async function pollTelegram() {
       const pnr = (txt.split(/\s+/)[1] || "").toUpperCase();
       if (!/^[A-Z0-9]{5,7}$/.test(pnr)) { await tg("sendMessage", { chat_id: u.message.chat.id, text: "Usage: /retest PNR" }); continue; }
       const since = new Date(Date.now() - 3 * 86400000).toISOString();
-      const { data: logs } = await sb.from("mail_log").select("id,subject").gte("created_at", since)
+      const { data: logs } = await sb.from("mail_log").select("id,subject,verdict,detail,message_id").gte("created_at", since)
         .or(`subject.ilike.%${pnr}%,detail.ilike.%${pnr}%`);
       const ids = (logs || []).map((r) => r.id);
       if (ids.length) await sb.from("mail_log").delete().in("id", ids);
       const { data: als } = await sb.from("alerts").select("id").eq("pnr", pnr).gte("created_at", since);
       if (als && als.length) await sb.from("alerts").delete().in("id", als.map((a) => a.id));
-      await tg("sendMessage", { chat_id: u.message.chat.id, text: `🔁 Retest ${pnr}: ${ids.length} mail(s) will be re-read on the next poll (≤60s), ${als?.length || 0} old alert(s) cleared.` });
+      const lines = (logs || []).map((r) => `• ${r.message_id.startsWith("gm-") ? "[Gmail]" : "[Fwd]"} ${String(r.subject).slice(0, 70)}\n   → ${r.verdict}${r.detail ? " (" + String(r.detail).slice(0, 80) + ")" : ""}`).join("\n");
+      await tg("sendMessage", { chat_id: u.message.chat.id, text: `🔁 Retest ${pnr}: ${ids.length} mail(s) will be re-read on the next poll (≤60s), ${als?.length || 0} old alert(s) cleared.${lines ? "\n\nPrevious result:\n" + lines : "\n\nNo mail with this PNR in its subject was found in the last 3 days."}` });
       continue;
     }
     if (!u.callback_query) continue;

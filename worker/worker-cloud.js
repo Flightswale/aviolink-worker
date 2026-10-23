@@ -416,12 +416,12 @@ async function handleParsed(agency, parsed, subject, messageId) {
 }
 
 // ---------- relevance gates ----------
-const AIRLINE_HINTS = /(airindia|goindigo|spicejet|akasaair|airindiaexpress|flydubai|emirates|qatarairways|etihad|singaporeair|turkishairlines|lufthansa|britishairways|riyadhair|saudia|flynas|airarabia|vistara|gulfair|omanair|kuwaitairways|srilankan|malaysiaairlines|thaiairways|cathaypacific|klm|airfrance|virginatlantic|americanairlines|united|delta|travelport|galileo|tripjack|tbo|travclan|mystifly|akbartravels|cleartrip|makemytrip|yatra|easemytrip|ixigo)/i;
+const AIRLINE_HINTS = /(pobeda|aeroflot|s7\.ru|utair|uralairlines|azurair|rossiya|onetwotrip|aviasales|kiwi\.com|trip\.com|expedia|edreams|opodo|gotogate|mytrip|wizzair|pegasus|ajet|sunexpress|airasia|vietjet|scoot|jetstar|cebupacific|philippineairlines|garuda|biman|usbangla|nepalairlines|buddhaair|drukair|bhutanairlines|maldivian|flyadeal|jazeeraairways|salamair|egyptair|royaljordanian|mea\.com|ethiopianairlines|kenya-airways|rwandair|airmauritius|aircanada|westjet|alaskaair|jetblue|southwest|aeromexico|latam|avianca|copaair|iberia|vueling|ryanair|easyjet|flytap|ita-airways|swiss\.com|austrian|brusselsairlines|finnair|flysas|lot\.com|aegeanair|aerlingus|condor|eurowings|chinasouthern|ceair|airchina|hainanairlines|ana\.co\.jp|jal\.co|koreanair|flyasiana|evaair|qantas|virginaustralia|airnewzealand|airindia|goindigo|spicejet|akasaair|airindiaexpress|flydubai|emirates|qatarairways|etihad|singaporeair|turkishairlines|lufthansa|britishairways|riyadhair|saudia|flynas|airarabia|vistara|gulfair|omanair|kuwaitairways|srilankan|malaysiaairlines|thaiairways|cathaypacific|klm|airfrance|virginatlantic|americanairlines|united|delta|travelport|galileo|tripjack|tbo|travclan|mystifly|akbartravels|cleartrip|makemytrip|yatra|easemytrip|ixigo)/i;
 // Generic airline-sender pattern: alerts@/notifications@/noreply@ *air*/airlines/airways domains
 const AIRLINE_SENDER = /@(?:[a-z0-9.-]*\b(?:air|airline|airways|aviation|fly)[a-z0-9-]*)\.[a-z]{2,}/i;
 const NEGATIVE_HINTS = /(login otp|otp email|one[- ]?time password|verification code|verify your|password reset|security alert|two[- ]?step|2-step|unsubscribe|newsletter|webinar|special offer|sale ends|promo(tion)?|discount|airport transfers|hotel deal|earn (points|miles|bluchips)|credit card offer|introducing|unmatched convenience|now (flying|connecting)|new route|inaugural|premium economy on|fare sale|book now and|boarding pass|web check-?in is now open|complete (your )?payment|feedback|survey|as per your (request|instruction)|your (cancellation|refund|change|rebooking) request|cancellation request (received|processed|confirmed)|refund (request|processed|initiated|status)|request for (cancellation|date change|reissue)|we have (cancelled|canceled) your booking as requested)/i;
 const GST_HINTS = /(tax ?invoice|gst invoice|invoice for your (booking|travel)|e-invoice)/i;
-const SUBJECT_HINTS = /(schedule (change|modification)|time change|flight (change|update|advisory|disruption|cancellation|delay)|\bdelays?\b|delayed|earlier departure|departure (is )?(now )?earlier|itinerary( change)?|revised (itinerary|schedule)|updated itinerary|new itinerary|resched|retimed|re-timed|cancel+ed|reaccommodat|re-accommodat|rebook|postponed|departure time|gate change|terminal change|e-?ticket|electronic ticket|ticket confirmation|booking (ref|reference|confirmation|confirmed)|reservation (confirmation|code)|record locator|confirmation number|travel (details|itinerary)|trip details|flight (details|booking|itinerary)|your (trip|upcoming flight)|PNR|galileo queue)/i;
+const SUBJECT_HINTS = /(schedule (change|modification)|time change|flight (change|update|advisory|disruption|cancellation|delay)|\bdelays?\b|delayed|earlier departure|departure (is )?(now )?earlier|itinerary( change)?|revised (itinerary|schedule)|updated itinerary|new itinerary|resched|retimed|re-timed|cancel+ed|reaccommodat|re-accommodat|rebook|postponed|departure time|gate change|terminal change|e-?ticket|electronic ticket|ticket confirmation|booking (ref|reference|confirmation|confirmed)|reservation (confirmation|code)|record locator|confirmation number|travel (details|itinerary)|trip details|flight (details|booking|itinerary|confirmation)|booking (no|number|#)|order (no|number)|information about your (flight|booking)|change (in|of) (the )?(departure|arrival)|departure and arrival|your (trip|upcoming flight)|PNR|galileo queue|рейс|изменени|бронировани)/i;
 function looksRelevant(email) {
   if (NEGATIVE_HINTS.test(email.subject || "")) return false;
   return AIRLINE_HINTS.test(email.from||"") || AIRLINE_HINTS.test(email.originalFrom||"") ||
@@ -578,8 +578,13 @@ async function gmailAccess(a) {
   accessCache.set(a.id, { token: t.access_token, exp: Date.now() + (t.expires_in || 3600) * 1000 });
   return t.access_token;
 }
+const gmailErrAt = new Map();
 async function gmailFail(a, e) {
   console.error(`[gmail-error] ${a.slug}: ${e.message}`);
+  if (!/invalid_grant|unauthorized|401/i.test(e.message) && Date.now() - (gmailErrAt.get(a.id) || 0) > 3600000) {
+    gmailErrAt.set(a.id, Date.now());
+    await adminCard(`⚠️ <b>GMAIL READ ERROR</b> · 🏢 ${esc(a.name)}\n${esc(e.message).slice(0, 300)}`);
+  }
   if (/invalid_grant|unauthorized|401/i.test(e.message)) {
     await sb.from("agencies").update({ gmail_error: e.message }).eq("id", a.id);
     await adminCard(`⚠️ <b>GMAIL DISCONNECTED</b> · 🏢 ${esc(a.name)} (${esc(a.gmail_email || "")})\n${esc(e.message)}\nAgency must reconnect from aviolink.in`);
@@ -588,7 +593,7 @@ async function gmailFail(a, e) {
 // Mails the agent SENT are never read (-from:me), spam IS read (airline mails land there), trash is not.
 const GMAIL_LIVE_Q = "newer_than:3d -from:me -in:trash -in:chats";
 async function pollGmail() {
-  for (const a of AGENCIES.filter((x) => x.gmail_refresh_token && x.gmail_backfill_status !== "running")) {
+  for (const a of AGENCIES.filter((x) => x.gmail_refresh_token)) {
     try {
       const access = await gmailAccess(a);
       const ids = await gmail.listIds(access, GMAIL_LIVE_Q, 300);
@@ -721,6 +726,10 @@ Reason: ${esc(why)}`);
 // ---------- main ----------
 (async () => {
   await loadAgencies();
+  try {
+    const { data: stuck } = await sb.from("agencies").update({ gmail_backfill_status: "pending" }).eq("gmail_backfill_status", "running").select("id");
+    if (stuck && stuck.length) { console.log(`[backfill] ${stuck.length} interrupted backfill(s) will resume`); await loadAgencies(); }
+  } catch (_) {}
   if (!DEFAULT_AGENCY) { console.error("No agencies in DB — run the schema SQL."); process.exit(1); }
   await tg("sendMessage", { chat_id: CFG.tgChat, text: `☁️ FlightAlert worker v3 — ${AGENCIES.length} agencies, ${AGENCIES.filter((a)=>a.gmail_refresh_token).length} Gmail-connected, watching ${CFG.imapUser}` });
   const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`poll timed out after ${ms / 1000}s`)), ms))]);

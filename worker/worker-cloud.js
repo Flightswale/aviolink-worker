@@ -745,6 +745,12 @@ Reason: ${esc(why)}`);
     const { data: stuck } = await sb.from("agencies").update({ gmail_backfill_status: "pending" }).eq("gmail_backfill_status", "running").select("id");
     if (stuck && stuck.length) { console.log(`[backfill] ${stuck.length} interrupted backfill(s) will resume`); await loadAgencies(); }
   } catch (_) {}
+  try {
+    // one-time repair: mails judged with an undecoded (=?UTF-8?...?=) subject get a fresh look
+    const since = new Date(Date.now() - 3 * 86400000).toISOString();
+    const { data: bad } = await sb.from("mail_log").delete().gte("created_at", since).like("subject", "%=?%").in("verdict", ["skip", "review"]).select("id");
+    if (bad && bad.length) { console.log(`[repair] ${bad.length} encoded-subject mail(s) will be re-read`); await adminCard(`🛠 Re-reading ${bad.length} mail(s) from the last 3 days that were skipped because their subject was encoded.`); }
+  } catch (e) { console.error("[repair]", e.message); }
   if (!DEFAULT_AGENCY) { console.error("No agencies in DB — run the schema SQL."); process.exit(1); }
   await tg("sendMessage", { chat_id: CFG.tgChat, text: `☁️ FlightAlert worker v3 — ${AGENCIES.length} agencies, ${AGENCIES.filter((a)=>a.gmail_refresh_token).length} Gmail-connected, watching ${CFG.imapUser}` });
   const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`poll timed out after ${ms / 1000}s`)), ms))]);

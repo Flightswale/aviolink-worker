@@ -101,14 +101,28 @@ function extractBody(head, rawBody) {
   if (isHtml || /<html|<body|<table/i.test(partText)) partText = stripHtml(partText);
   return partText;
 }
+// RFC 2047 encoded-words: =?charset?B|Q?...?=  (emoji senders, Russian/Arabic/Hindi subjects, many airline systems)
+function decodeMimeWords(s) {
+  if (!s || s.indexOf("=?") === -1) return s;
+  return s.replace(/\?=\s+=\?/g, "?==?").replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, (_, cs, enc, txt) => {
+    try {
+      const buf = /b/i.test(enc)
+        ? Buffer.from(txt, "base64")
+        : Buffer.from(txt.replace(/_/g, " ").replace(/=([0-9A-Fa-f]{2})/g, (m, hx) => String.fromCharCode(parseInt(hx, 16))), "latin1");
+      const c = cs.toLowerCase().replace(/\*.*$/, "");
+      try { return new TextDecoder(c).decode(buf); } catch (_) { return buf.toString("utf8"); }
+    } catch (_) { return txt; }
+  });
+}
 function splitEmail(rawEml) {
   const norm = rawEml.replace(/\r\n/g, "\n");
   const idx = norm.indexOf("\n\n");
-  const head = idx === -1 ? norm : norm.slice(0, idx);
+  // unfold folded header lines (a long Subject is often split over two lines)
+  const head = (idx === -1 ? norm : norm.slice(0, idx)).replace(/\n[ \t]+/g, " ");
   const rawBody = idx === -1 ? "" : norm.slice(idx + 2);
   const h = (name) => {
     const m = head.match(new RegExp(`^${name}:\\s*(.+)$`, "im"));
-    return m ? m[1].trim() : "";
+    return m ? decodeMimeWords(m[1].trim()) : "";
   };
   const body = extractBody(head, rawBody);
   const fwd = body.match(/^From:\s*.*?<([^>\s]+@[^>\s]+)>/im);
@@ -252,4 +266,4 @@ async function parseEmail(rawEml, opts = {}) {
 }
 
 const helpers = { parseDate, parseTime, normSector, normFlight, extractPaxNames };
-module.exports = { parseEmail, splitEmail, helpers, scoreResult, aiFallback };
+module.exports = { parseEmail, splitEmail, helpers, scoreResult, aiFallback, decodeMimeWords };

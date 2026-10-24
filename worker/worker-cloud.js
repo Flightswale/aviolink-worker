@@ -26,18 +26,23 @@ let pdfParse = null;
 try { pdfParse = require("pdf-parse"); } catch (_) { console.log("[pdf] pdf-parse not installed — attachment reading off"); }
 
 // Extract text from PDF attachments inside the raw MIME (base64 application/pdf parts).
+let simpleParser = null;
+try { ({ simpleParser } = require("mailparser")); } catch (_) { console.log("[pdf] mailparser not installed"); }
+// Text of every PDF attachment (any MIME layout, application/pdf or octet-stream named *.pdf)
 async function extractPdfTexts(raw) {
-  if (!pdfParse) return "";
+  if (!pdfParse || !simpleParser) return "";
   const out = [];
-  const re = /Content-Type:\s*application\/pdf[\s\S]{0,400}?Content-Transfer-Encoding:\s*base64\s*\n\n?([A-Za-z0-9+/=\s]{500,})/gi;
-  let m;
-  while ((m = re.exec(raw)) !== null && out.length < 5) {
-    try {
-      const buf = Buffer.from(m[1].replace(/\s+/g, ""), "base64");
-      const d = await pdfParse(buf);
-      if (d.text && d.text.trim().length > 50) out.push(d.text);
-    } catch (e) { console.log("[pdf] attachment parse failed:", e.message); }
-  }
+  try {
+    const parsed = await simpleParser(raw, { skipHtmlToText: true, skipTextToHtml: true, skipImageLinks: true });
+    for (const att of parsed.attachments || []) {
+      const isPdf = /pdf/i.test(att.contentType || "") || /\.pdf$/i.test(att.filename || "");
+      if (!isPdf || !att.content || out.length >= 5) continue;
+      try {
+        const d = await pdfParse(att.content);
+        if (d.text && d.text.trim().length > 30) out.push(`--- ${att.filename || "attachment.pdf"} ---\n${d.text}`);
+      } catch (e2) { console.log("[pdf] attachment parse failed:", att.filename, e2.message); }
+    }
+  } catch (e) { console.log("[pdf] mime parse failed:", e.message); }
   return out.join("\n\n");
 }
 
@@ -340,9 +345,16 @@ async function handleParsed(agency, parsed, subject, messageId) {
         const p = al.payload || {};
         const paxMissing = !(p.passengers && p.passengers.length);
         const pnrMatch = al.pnr && al.pnr === parsed.pnr;
-        const flightMatch = !al.pnr && (p.segments || []).some((s) =>
-          flights.has(s.old?.flight) || flights.has(s.new?.flight) || flights.has(s.flight));
-        if ((pnrMatch && paxMissing) || flightMatch) {
+        const norm = (f) => String(f || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const tk = new Set((parsed.segments || []).map((s) => norm(s.flight) + "|" + (s.date || "")));
+        const flightMatch = (p.segments || []).some((s) => [s.old, s.new].some((l) => l && tk.has(norm(l.flight) + "|" + (l.date || ""))))
+          || (!al.pnr && (p.segments || []).some((s) => flights.has(s.old?.flight) || flights.has(s.new?.flight) || flights.has(s.flight)));
+        let ownBooking = false;
+        if (flightMatch && al.pnr && al.pnr !== parsed.pnr) {
+          const { data: ob } = await sb.from("bookings").select("id").eq("agency_id", agency.id).eq("pnr", al.pnr).maybeSingle();
+          ownBooking = Boolean(ob); // that PNR has its own ticket — never borrow names from another booking
+        }
+        if (paxMissing && (pnrMatch || (flightMatch && !ownBooking))) {
           p.passengers = parsed.passengers || [];
           p.pnr = p.pnr || parsed.pnr;
           enrichOldTiming(p, parsed.segments);
@@ -422,8 +434,9 @@ async function handleParsed(agency, parsed, subject, messageId) {
     return;
   }
 
-  await logMail(agency.id, messageId, subject, "review");
-  await adminCard(`🔍 <b>UNRECOGNISED</b> · ${tag}\nSubject: ${esc(subject)}`);
+  const why = `kind=${parsed.kind || "-"} pnr=${parsed.pnr || "-"} pax=${(parsed.passengers || []).length} legs=${(parsed.segments || []).length} src=${parsed.source || "-"}`;
+  await logMail(agency.id, messageId, subject, "review", why);
+  await adminCard(`🔍 <b>UNRECOGNISED</b> · ${tag}\nSubject: ${esc(subject)}\n<i>${esc(why)}</i>`);
   console.log(`[review] ${agency.slug} ${subject}`);
 }
 
@@ -507,7 +520,7 @@ async function processRaw(raw, mid, subject, forcedAgency = null, opts = {}) {
 
     if (opts.bookingsOnly) {
       if (!looksRelevant(email)) { await logMail(agency.id, mid, subject, "backfill-skip"); return; }
-      const parsed = await parseEmail(raw, { ai: Boolean(CFG.anthropicKey), apiKey: CFG.anthropicKey || undefined });
+      const parsed = await parseEmail(raw, { ai: Boolean(CFG.anthropicKey), apiKey: CFG.anthropicKey || undefined, email });
       if (parsed.kind === "TICKET" && parsed.pnr) {
         await upsertBooking(agency.id, parsed, extractClientMobile(email.body) ? { mobile: extractClientMobile(email.body) } : {});
         await logMail(agency.id, mid, subject, "backfill-ticket", parsed.pnr);
@@ -536,7 +549,7 @@ async function processRaw(raw, mid, subject, forcedAgency = null, opts = {}) {
       await logMail(agency.id, mid, subject, "queue-sweep", `${total} scanned, ${all.length} changes`);
       await adminCard(`🧾 <b>QUEUE SWEEP</b> · 🏢 ${esc(agency.name)}\nScanned ${total} · changes ${all.length}`);
     } else {
-      const parsed = await parseEmail(raw, { ai: Boolean(CFG.anthropicKey), apiKey: CFG.anthropicKey || undefined });
+      const parsed = await parseEmail(raw, { ai: Boolean(CFG.anthropicKey), apiKey: CFG.anthropicKey || undefined, email });
       parsed._bodyMobile = extractClientMobile(email.body);
       if ((parsed.confidence || 0) === 0 && !SUBJECT_HINTS.test(subject)) {
         await logMail(agency.id, mid, subject, "skip", "airline mail, not booking-related");

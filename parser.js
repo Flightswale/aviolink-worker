@@ -221,7 +221,7 @@ async function aiFallback(email, opts = {}) {
 
 // ---------- main entry ----------
 async function parseEmail(rawEml, opts = {}) {
-  const email = splitEmail(rawEml);
+  const email = opts.email || splitEmail(rawEml); // caller may pass a pre-split email that already carries PDF attachment text
   const templates = opts._templates || loadTemplates();
 
   for (const tpl of templates) {

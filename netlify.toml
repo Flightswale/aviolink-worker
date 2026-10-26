@@ -1,0 +1,4 @@
+# This repo is the FlightAlert worker (runs on Railway), NOT a Netlify site.
+# "exit 0" tells Netlify to skip every build, so no build minutes/credits are used.
+[build]
+  ignore = "exit 0"

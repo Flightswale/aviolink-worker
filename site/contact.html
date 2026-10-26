@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Contact — Aviolink</title>
+<meta name="description" content="Contact Aviolink for sales, support or partnerships. WhatsApp, email and office details.">
+<meta property="og:title" content="Contact — Aviolink"><meta property="og:description" content="Contact Aviolink for sales, support or partnerships. WhatsApp, email and office details."><meta property="og:type" content="website"><meta property="og:url" content="https://aviolink.in/contact.html">
+<link rel="icon" type="image/svg+xml" href="assets/mark.svg"><link rel="apple-touch-icon" href="assets/aviolink-icon-640.png"><meta property="og:image" content="https://aviolink.in/assets/aviolink-logo-light.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+</head><body>
+<header class="site"><div class="wrap">
+<a class="logo" href="index.html"><img src="assets/logo-dark.svg" alt="Aviolink Flight Alert" style="height:42px"></a>
+<button class="menu-t" aria-label="Menu" onclick="document.querySelector('nav.main').classList.toggle('open')">☰</button>
+<nav class="main"><a href="index.html">Home</a><a href="flightalert.html">Product</a><a href="pricing.html">Pricing</a><a href="about.html">About</a><a href="team.html">Team</a><a href="contact.html" class=on>Contact</a><a class="btn btn-amber" href="signup.html">Start free trial</a></nav>
+</div></header>
+<section class="phero"><div class="wrap"><div class="kicker">Contact</div><h1>Talk to a person who knows ticketing.</h1><p>Questions about FlightAlert, a demo for your team, or partnership enquiries — we usually reply within a few working hours.</p></div></section>
+<section><div class="wrap">
+ <div class="cards c3">
+  <div class="card"><div class="ic">💬</div><h3>WhatsApp</h3><p>Fastest for quick questions and demos.</p><p style="margin-top:10px"><a href="https://wa.me/919270546474"><b>+91 92705 46474</b></a></p></div>
+  <div class="card"><div class="ic">📧</div><h3>Email</h3><p>Support, billing and partnerships.</p><p style="margin-top:10px"><a href="mailto:support@aviolink.in"><b>support@aviolink.in</b></a></p></div>
+  <div class="card"><div class="ic">📍</div><h3>Office</h3><p>Finch Travels<br>Office No. C-304, Newton Homes,<br>Near Runwal Seagull, Shriram Chowk,<br>Handewadi Road, Hadapsar,<br>Pune 411028, Maharashtra</p><p style="margin-top:10px;color:var(--muted);font-size:.88rem">Mon–Sat · 10:00–19:00 IST</p></div>
+ </div>
+ <div class="formcard" style="max-width:720px;margin:48px auto 0">
+  <h2 class="sec" style="font-size:1.5rem;margin-top:0">Send us a message</h2>
+  <form id="cf">
+   <label>Your name</label><input id="cn" required>
+   <label>Agency name</label><input id="ca">
+   <label>Email or WhatsApp number</label><input id="ce" required>
+   <label>Message</label><textarea id="cm" rows="5" required></textarea>
+   <button class="ebtn" style="margin-top:20px" type="submit">Send via WhatsApp →</button>
+   <div class="hint" style="text-align:center">Opens WhatsApp with your message ready to send.</div>
+  </form>
+ </div>
+</div></section>
+<footer class="site"><div class="wrap">
+<div class="cols">
+ <div><a class="logo" href="index.html"><img src="assets/logo-dark.svg" alt="Aviolink Flight Alert" style="height:44px"></a>
+ <p style="margin-top:14px;max-width:300px">Aviation software for travel agencies. Every flight change, delay and cancellation — caught and communicated, automatically.</p></div>
+ <div><h4>Product</h4><a href="flightalert.html">FlightAlert</a><a href="flightalert.html#how">How it works</a><a href="pricing.html">Pricing</a><a href="security.html">Data &amp; security</a><a href="signup.html">Start free trial</a></div>
+ <div><h4>Company</h4><a href="about.html">About us</a><a href="team.html">Our team</a><a href="contact.html">Contact</a></div>
+ <div><h4>Legal</h4><a href="terms.html">Terms of service</a><a href="privacy.html">Privacy policy</a><a href="refund.html">Refund &amp; cancellation</a><a href="delivery.html">Service delivery</a></div>
+</div>
+<div class="bottom"><span>© 2026 Aviolink · Operated by Finch Travels · Office No. C-304, Newton Homes, Near Runwal Seagull, Shriram Chowk, Handewadi Road, Hadapsar, Pune 411028, Maharashtra, India</span><span>📧 <a href="mailto:support@aviolink.in" style="display:inline">support@aviolink.in</a> · 📱 <a href="https://wa.me/919270546474" style="display:inline">+91 92705 46474</a></span></div>
+</div></footer>
+<script>
+document.getElementById('cf').addEventListener('submit',function(e){e.preventDefault();
+var t='Hello Aviolink,%0A%0AName: '+encodeURIComponent(cn.value)+'%0AAgency: '+encodeURIComponent(ca.value)+'%0AContact: '+encodeURIComponent(ce.value)+'%0A%0A'+encodeURIComponent(cm.value);
+window.open('https://wa.me/919270546474?text='+t,'_blank');});
+</script>
+</body></html>

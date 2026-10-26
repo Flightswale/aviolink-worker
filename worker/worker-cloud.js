@@ -484,7 +484,7 @@ Tips:
 - Also forward your recent unflown ticket mails once - alerts will then always carry your passenger's name.
 - We read only airline/booking mails; everything else is discarded instantly.
 
-Questions? Reply to this mail, write to support@aviolink.in or WhatsApp +91-9503255845.
+Questions? Reply to this mail, write to support@aviolink.in or WhatsApp +91-9270546474.
 
 Fly safe,
 Team Aviolink
@@ -678,7 +678,7 @@ async function runBackfills() {
 
 const LEGAL_CSS = `<meta name=viewport content="width=device-width,initial-scale=1"><style>body{font-family:system-ui;max-width:760px;margin:40px auto;padding:0 18px;color:#1f2937;line-height:1.6}h1{color:#1E2761}h2{color:#1E2761;font-size:1.1rem;margin-top:26px}</style>`;
 const PRIVACY_HTML = `<!doctype html><title>Privacy Policy — Aviolink</title>${LEGAL_CSS}
-<h1>Aviolink FlightAlert — Privacy Policy</h1><p>Last updated: 17 October 2026. Operated by Finch Travels, Pune, India (support@aviolink.in, +91 9503255845).</p>
+<h1>Aviolink FlightAlert — Privacy Policy</h1><p>Last updated: 17 October 2026. Operated by Finch Travels, Pune, India (support@aviolink.in, +91 9270546474).</p>
 <h2>What we access</h2><p>When a travel agency connects its mailbox using "Sign in with Google", Aviolink receives read-only access (Gmail scope <code>gmail.readonly</code>). We never send, delete or modify mail, and we never see the account password.</p>
 <h2>What we use it for</h2><p>Solely to detect airline and travel-vendor emails — e-tickets, itineraries, schedule changes, delays and cancellations — and turn them into flight-change alerts for that agency. Other emails are skipped automatically and their content is not stored.</p>
 <h2>What we store</h2><p>From relevant airline mails only: PNR, airline, flight numbers, dates and timings, passenger names and contact number when present, and the alert text. We also store the message ID and subject to avoid processing a mail twice. Data is stored in an encrypted database (Supabase, India region) and is used only to provide the service to that agency.</p>

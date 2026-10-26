@@ -1,0 +1,4 @@
+# aviolink.in website — Netlify publishes the ready-built /site folder (no build step)
+[build]
+  publish = "site"
+  command = ""

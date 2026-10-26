@@ -551,7 +551,10 @@ async function processRaw(raw, mid, subject, forcedAgency = null, opts = {}) {
     } else {
       const parsed = await parseEmail(raw, { ai: Boolean(CFG.anthropicKey), apiKey: CFG.anthropicKey || undefined, email });
       parsed._bodyMobile = extractClientMobile(email.body);
-      if ((parsed.confidence || 0) === 0 && !SUBJECT_HINTS.test(subject)) {
+      if (parsed.source === "ai-not-booking") {
+        await logMail(agency.id, mid, subject, "info", "AI: informational, no booking event");
+        console.log(`[info] ${subject}`);
+      } else if ((parsed.confidence || 0) === 0 && !SUBJECT_HINTS.test(subject)) {
         await logMail(agency.id, mid, subject, "skip", "airline mail, not booking-related");
       } else {
         await handleParsed(agency, parsed, subject, mid);
@@ -740,6 +743,8 @@ async function nightlyReport(force = false) {
   const airlineSkips = R.filter((r) => r.verdict === "skip" && /rules\+AI/.test(r.detail || "") && (AIRLINE_SENDER.test("@" + String(r.detail).split("| ")[1]) || AIRLINE_HINTS.test(r.detail || "")));
   const { count: alerts } = await sb.from("alerts").select("id", { count: "exact", head: true }).gte("created_at", since);
   let msg = `📋 <b>DAILY REPORT</b> · last 24 h\nMails read: ${R.length}\n🎫 Tickets saved: ${n("ticket")}\n⚡ Change mails: ${n("change")} · alerts created: ${alerts ?? "?"}\n🔍 Unrecognised: ${n("review")} · duplicates silenced: ${n("dup")}\n⏭ Skipped: ${n("skip")}`;
+  const infos = R.filter((r) => r.verdict === "info");
+  if (infos.length) msg += `\n\nℹ️ <b>Informational airline mails (no alert needed):</b>\n` + infos.slice(0, 10).map((r) => "• " + esc(String(r.subject).slice(0, 80))).join("\n");
   const reviews = R.filter((r) => r.verdict === "review");
   if (reviews.length) msg += `\n\n🔍 <b>Unrecognised (check if any is a real change):</b>\n` + reviews.slice(0, 10).map((r) => "• " + esc(String(r.subject).slice(0, 80)) + (r.detail ? `\n   <i>${esc(String(r.detail).slice(0, 90))}</i>` : "")).join("\n");
   msg += airlineSkips.length ? `\n\n⚠️ <b>Airline-sender mails skipped — please glance:</b>\n` + airlineSkips.slice(0, 15).map((r) => "• " + esc(String(r.subject).slice(0, 80))).join("\n") : "\n\n✅ No airline-sender mail was skipped.";

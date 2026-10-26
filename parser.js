@@ -211,7 +211,7 @@ async function aiFallback(email, opts = {}) {
     // Tolerate chatter around the JSON: parse from the first "{" to the last "}".
     const a = clean.indexOf("{"), b = clean.lastIndexOf("}");
     const parsed = JSON.parse(a >= 0 && b > a ? clean.slice(a, b + 1) : clean);
-    if (!parsed || !parsed.kind) { console.log("[ai] mail judged not booking-related"); return null; }
+    if (!parsed || !parsed.kind) { console.log("[ai] mail judged not booking-related"); return { _notBooking: true }; }
     return parsed;
   } catch (err) {
     console.error(`[ai-error] ${err.message}`);
@@ -248,6 +248,10 @@ async function parseEmail(rawEml, opts = {}) {
 
   if (opts.ai !== false) {
     const r = await aiFallback(email, opts);
+    if (r && r._notBooking) {
+      return { pnr: null, airline: null, changeType: null, kind: null, passengers: [], segments: [], actionDeadline: null,
+        confidence: 0, source: "ai-not-booking", raw: { subject: email.subject, from: email.from } };
+    }
     if (r && r.kind) {
       r.passengers = r.passengers || [];
       r.segments = r.segments || [];

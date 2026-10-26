@@ -551,7 +551,24 @@ async function processRaw(raw, mid, subject, forcedAgency = null, opts = {}) {
     } else {
       const parsed = await parseEmail(raw, { ai: Boolean(CFG.anthropicKey), apiKey: CFG.anthropicKey || undefined, email });
       parsed._bodyMobile = extractClientMobile(email.body);
-      if (parsed.source === "ai-not-booking") {
+      let linked = null;
+      if (parsed.source === "ai-not-booking") linked = await findLinkedBooking(agency, email);
+      if (parsed.source === "ai-not-booking" && linked) {
+        // Second, focused read: the mail mentions one of our own bookings — does it change it?
+        const ctx = `EXISTING BOOKING ON FILE — PNR ${linked.pnr}${linked.airline ? " (" + linked.airline + ")" : ""}, passengers: ${(linked.passengers || []).join(", ") || "n/a"}\n` +
+          (linked.segments || []).map((s) => `  ${s.flight || ""} ${s.sector || ""} ${s.date || ""} ${s.dep || ""}-${s.arr || ""}`).join("\n") +
+          `\n\nThe email below may contain a change to this booking hidden inside general travel information (new departure/arrival time, new flight number, new date, cancellation, terminal change with retime). Compare it carefully with the booking above. If anything changed, return a SCHEDULE_CHANGE with old (from the booking) and new values for every leg; use PNR ${linked.pnr}. If nothing in the booking changed, return {"kind":null}.\n\n=== EMAIL ===\n`;
+        const p2 = await parseEmail(raw, { ai: Boolean(CFG.anthropicKey), apiKey: CFG.anthropicKey || undefined, email: { ...email, body: ctx + email.body }, _templates: [] });
+        p2._bodyMobile = parsed._bodyMobile;
+        if (p2.kind === "SCHEDULE_CHANGE" && (p2.segments || []).length) {
+          p2.pnr = p2.pnr || linked.pnr;
+          console.log(`[linked] ${subject} -> change found for ${linked.pnr}`);
+          await handleParsed(agency, p2, subject, mid);
+        } else {
+          await logMail(agency.id, mid, subject, "info", `linked to booking ${linked.pnr} — no change found`);
+          console.log(`[info] ${subject} (linked ${linked.pnr}, no change)`);
+        }
+      } else if (parsed.source === "ai-not-booking") {
         await logMail(agency.id, mid, subject, "info", "AI: informational, no booking event");
         console.log(`[info] ${subject}`);
       } else if ((parsed.confidence || 0) === 0 && !SUBJECT_HINTS.test(subject)) {
@@ -697,6 +714,28 @@ const TERMS_HTML = `<!doctype html><title>Terms of Service — Aviolink</title>$
 <h2>Data</h2><p>See our <a href="/privacy">Privacy Policy</a>. Disconnecting your mailbox stops all access immediately.</p>`;
 
 
+
+// Does this mail mention one of the agency's saved bookings (by PNR, or flight number + date)?
+async function findLinkedBooking(agency, email) {
+  try {
+    const text = `${email.subject || ""}\n${email.body || ""}`.toUpperCase();
+    const pnrs = [...new Set((text.match(/\b[A-Z0-9]{6}\b/g) || []).filter((t) => /[A-Z]/.test(t) && /\d/.test(t) || /^[A-Z]{6}$/.test(t)))].slice(0, 40);
+    if (pnrs.length) {
+      const { data } = await sb.from("bookings").select("pnr,airline,passengers,segments").eq("agency_id", agency.id).in("pnr", pnrs).limit(1);
+      if (data && data.length) return data[0];
+    }
+    const flights = [...new Set((text.match(/\b([A-Z0-9]{2})\s?-?\s?(\d{2,4})\b/g) || []).map((f) => f.replace(/[^A-Z0-9]/g, "")))].slice(0, 20);
+    if (flights.length) {
+      const since = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+      const { data } = await sb.from("bookings").select("pnr,airline,passengers,segments").eq("agency_id", agency.id).order("captured_at", { ascending: false }).limit(800);
+      for (const b of data || []) {
+        if ((b.segments || []).some((s) => s.date >= since && flights.includes(String(s.flight || "").toUpperCase().replace(/[^A-Z0-9]/g, "")))) return b;
+      }
+    }
+  } catch (e) { console.error("[linked]", e.message); }
+  return null;
+}
+
 // ---------- AI safety net: second opinion before any mail is skipped ----------
 async function aiSaysTravel(email) {
   if (!CFG.anthropicKey) return false;
@@ -744,7 +783,7 @@ async function nightlyReport(force = false) {
   const { count: alerts } = await sb.from("alerts").select("id", { count: "exact", head: true }).gte("created_at", since);
   let msg = `📋 <b>DAILY REPORT</b> · last 24 h\nMails read: ${R.length}\n🎫 Tickets saved: ${n("ticket")}\n⚡ Change mails: ${n("change")} · alerts created: ${alerts ?? "?"}\n🔍 Unrecognised: ${n("review")} · duplicates silenced: ${n("dup")}\n⏭ Skipped: ${n("skip")}`;
   const infos = R.filter((r) => r.verdict === "info");
-  if (infos.length) msg += `\n\nℹ️ <b>Informational airline mails (no alert needed):</b>\n` + infos.slice(0, 10).map((r) => "• " + esc(String(r.subject).slice(0, 80))).join("\n");
+  if (infos.length) msg += `\n\nℹ️ <b>Informational airline mails (no alert needed):</b>\n` + infos.slice(0, 10).map((r) => "• " + esc(String(r.subject).slice(0, 80)) + (/linked/.test(r.detail || "") ? `\n   <i>${esc(r.detail)}</i>` : "")).join("\n");
   const reviews = R.filter((r) => r.verdict === "review");
   if (reviews.length) msg += `\n\n🔍 <b>Unrecognised (check if any is a real change):</b>\n` + reviews.slice(0, 10).map((r) => "• " + esc(String(r.subject).slice(0, 80)) + (r.detail ? `\n   <i>${esc(String(r.detail).slice(0, 90))}</i>` : "")).join("\n");
   msg += airlineSkips.length ? `\n\n⚠️ <b>Airline-sender mails skipped — please glance:</b>\n` + airlineSkips.slice(0, 15).map((r) => "• " + esc(String(r.subject).slice(0, 80))).join("\n") : "\n\n✅ No airline-sender mail was skipped.";

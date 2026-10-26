@@ -722,7 +722,7 @@ async function watchdog() {
     if (!h.okAt || Date.now() - h.okAt > 15 * 60000) {
       if (Date.now() - (watchdogWarned.get(a.id) || 0) > 3600000) {
         watchdogWarned.set(a.id, Date.now());
-        await adminCard(`🚨 <b>GMAIL NOT READ FOR 15+ MIN</b> · 🏢 ${esc(a.name)} (${esc(a.gmail_email)})\\nLast OK: ${h.okAt ? new Date(h.okAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" }) : "never since restart"}${h.err ? "\\nError: " + esc(String(h.err).slice(0, 200)) : ""}`);
+        await adminCard(`🚨 <b>GMAIL NOT READ FOR 15+ MIN</b> · 🏢 ${esc(a.name)} (${esc(a.gmail_email)})\nLast OK: ${h.okAt ? new Date(h.okAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" }) : "never since restart"}${h.err ? "\nError: " + esc(String(h.err).slice(0, 200)) : ""}`);
       }
     }
   }
@@ -739,9 +739,11 @@ async function nightlyReport(force = false) {
   const n = (v) => R.filter((r) => r.verdict === v).length;
   const airlineSkips = R.filter((r) => r.verdict === "skip" && /rules\+AI/.test(r.detail || "") && (AIRLINE_SENDER.test("@" + String(r.detail).split("| ")[1]) || AIRLINE_HINTS.test(r.detail || "")));
   const { count: alerts } = await sb.from("alerts").select("id", { count: "exact", head: true }).gte("created_at", since);
-  let msg = `📋 <b>DAILY REPORT</b> · last 24 h\\nMails read: ${R.length}\\n🎫 Tickets saved: ${n("ticket")}\\n⚡ Change mails: ${n("change")} · alerts created: ${alerts ?? "?"}\\n🔍 Unrecognised: ${n("review")} · duplicates silenced: ${n("dup")}\\n⏭ Skipped: ${n("skip")}`;
-  msg += airlineSkips.length ? `\\n\\n⚠️ <b>Airline-sender mails skipped — please glance:</b>\\n` + airlineSkips.slice(0, 15).map((r) => "• " + esc(String(r.subject).slice(0, 80))).join("\\n") : "\\n\\n✅ No airline-sender mail was skipped.";
-  for (const a of AGENCIES.filter((x) => x.gmail_refresh_token)) { const h = GMAIL_HEALTH.get(a.id) || {}; msg += `\\n\\n📬 ${esc(a.name)}: Gmail last read ${h.okAt ? Math.round((Date.now() - h.okAt) / 60000) + " min ago" : "never"}`; }
+  let msg = `📋 <b>DAILY REPORT</b> · last 24 h\nMails read: ${R.length}\n🎫 Tickets saved: ${n("ticket")}\n⚡ Change mails: ${n("change")} · alerts created: ${alerts ?? "?"}\n🔍 Unrecognised: ${n("review")} · duplicates silenced: ${n("dup")}\n⏭ Skipped: ${n("skip")}`;
+  const reviews = R.filter((r) => r.verdict === "review");
+  if (reviews.length) msg += `\n\n🔍 <b>Unrecognised (check if any is a real change):</b>\n` + reviews.slice(0, 10).map((r) => "• " + esc(String(r.subject).slice(0, 80)) + (r.detail ? `\n   <i>${esc(String(r.detail).slice(0, 90))}</i>` : "")).join("\n");
+  msg += airlineSkips.length ? `\n\n⚠️ <b>Airline-sender mails skipped — please glance:</b>\n` + airlineSkips.slice(0, 15).map((r) => "• " + esc(String(r.subject).slice(0, 80))).join("\n") : "\n\n✅ No airline-sender mail was skipped.";
+  for (const a of AGENCIES.filter((x) => x.gmail_refresh_token)) { const h = GMAIL_HEALTH.get(a.id) || {}; msg += `\n\n📬 ${esc(a.name)}: Gmail last read ${h.okAt ? Math.round((Date.now() - h.okAt) / 60000) + " min ago" : "never"}`; }
   await adminCard(msg);
 }
 

@@ -369,6 +369,22 @@ async function handleParsed(agency, parsed, subject, messageId) {
     return;
   }
 
+  // Airline says "PNR X changed" but gives no flights/timings (e.g. Qatar "view my flight schedule" mails)
+  if (parsed.kind === "SCHEDULE_CHANGE" && parsed.pnr && !(parsed.segments || []).length) {
+    const { data: b } = await sb.from("bookings").select("passengers,segments,airline").eq("agency_id", agency.id).eq("pnr", parsed.pnr).maybeSingle();
+    const pax = (b?.passengers || parsed.passengers || []);
+    const legs = (b?.segments || []).map((s) => `${s.flight || ""} · ${String(s.sector || "").replace("-", " → ")} · ${s.date || ""} · ${s.dep || "--"}–${s.arr || "--"}`);
+    const airline = parsed.airline || b?.airline || "";
+    const fromAddr = ((parsed.raw?.from || "").match(/@([^>\s]+)/) || [])[1] || "";
+    await logMail(agency.id, messageId, subject, "change", `${parsed.pnr} — notice without details`);
+    await adminCard(`⚡ <b>SCHEDULE CHANGE — DETAILS NOT IN MAIL</b> · ${tag}\n🎫 PNR: <b>${esc(parsed.pnr)}</b>${airline ? " · ✈️ " + esc(airline) : ""}${fromAddr ? " · " + esc(fromAddr) : ""}\n` +
+      (pax.length ? `👤 ${esc(pax.join(", "))}\n` : "👤 (no ticket on file)\n") +
+      (legs.length ? `\n<b>Booked flights (before change):</b>\n${esc(legs.join("\n"))}\n` : "") +
+      `\n⚠️ The airline did not include the new timings. Check the PNR in GDS / airline website and inform the client.\n<i>Not sent to client automatically.</i>`);
+    console.log(`[change-notice] ${agency.slug} ${parsed.pnr} (no details in mail)`);
+    return;
+  }
+
   if (parsed.kind === "SCHEDULE_CHANGE" && (parsed.segments || []).length) {
     if (parsed.pnr) {
       const { data: b } = await sb.from("bookings").select("passengers,mobile").eq("agency_id", agency.id).eq("pnr", parsed.pnr).maybeSingle();

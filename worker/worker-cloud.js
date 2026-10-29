@@ -574,7 +574,9 @@ async function processRaw(raw, mid, subject, forcedAgency = null, opts = {}) {
     if (GST_HINTS.test(subject)) {
       await sb.from("gst_invoices").insert({ agency_id: agency.id, subject, invoice_ref: (subject.match(/[A-Z]{2}\d{6,}[A-Z0-9]*/)||[])[0]||null });
       await logMail(agency.id, mid, subject, "gst");
-    } else if (!looksRelevant(email) && (NEGATIVE_HINTS.test(subject) || !(await aiSaysTravel(email)))) {
+    } else if ((() => { const fromAir = AIRLINE_HINTS.test(email.from || "") || AIRLINE_SENDER.test(email.from || "");
+                         return (NEGATIVE_HINTS.test(subject) && !fromAir) || !looksRelevant(email); })()
+               && ((NEGATIVE_HINTS.test(subject) && !(AIRLINE_HINTS.test(email.from || "") || AIRLINE_SENDER.test(email.from || ""))) || !(await aiSaysTravel(email)))) {
       const sender = ((email.from || "").match(/@([^>\s]+)/) || [])[1] || "";
       await logMail(agency.id, mid, subject, "skip", `${NEGATIVE_HINTS.test(subject) ? "rule: promo/otp/check-in" : "rules+AI: not travel"} | ${sender}`);
       console.log(`[skip] ${subject}`);

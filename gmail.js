@@ -59,11 +59,17 @@ async function profile(access) { return gapi(access, "profile"); } // { emailAdd
 async function listIds(access, q, max = 200) {
   const ids = []; let pageToken = "";
   while (ids.length < max) {
-    const page = await gapi(access, `messages?q=${encodeURIComponent(q)}&maxResults=${Math.min(100, max - ids.length)}${pageToken ? "&pageToken=" + pageToken : ""}`);
+    const page = await gapi(access, `messages?q=${encodeURIComponent(q)}&maxResults=${Math.min(500, max - ids.length)}${pageToken ? "&pageToken=" + pageToken : ""}`);
     for (const m of page.messages || []) ids.push(m.id);
     pageToken = page.nextPageToken; if (!pageToken || !(page.messages || []).length) break;
   }
   return ids;
+}
+// Headers only (From, Subject, Date) — cheap, for scanning a whole year of mail.
+async function getMeta(access, id) {
+  const m = await gapi(access, `messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`);
+  const h = Object.fromEntries((m.payload?.headers || []).map((x) => [x.name.toLowerCase(), x.value]));
+  return { id, from: h.from || "", subject: h.subject || "", ts: Number(m.internalDate || 0) };
 }
 // Full RFC-822 source of one message, as a UTF-8 string (same shape IMAP gives us).
 async function getRaw(access, id) {
@@ -71,4 +77,4 @@ async function getRaw(access, id) {
   return Buffer.from(String(m.raw || "").replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
 }
 
-module.exports = { enabled, authUrl, verifyState, exchangeCode, refreshAccess, profile, listIds, getRaw, PUBLIC_URL };
+module.exports = { enabled, authUrl, verifyState, exchangeCode, refreshAccess, profile, listIds, getRaw, getMeta, PUBLIC_URL };

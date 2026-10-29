@@ -18,7 +18,7 @@ const fs = require("fs");
 const { ImapFlow } = require("imapflow");
 const nodemailer = require("nodemailer");
 const { createClient } = require("@supabase/supabase-js");
-const { parseEmail, splitEmail, helpers } = require("../parser");
+const { parseEmail, splitEmail, helpers, decodeMimeWords } = require("../parser");
 const { compile } = require("../compiler");
 const http = require("http");
 const gmail = require("../gmail");
@@ -560,7 +560,7 @@ async function processRaw(raw, mid, subject, forcedAgency = null, opts = {}) {
     }
 
     if (opts.bookingsOnly) {
-      if (!looksRelevant(email)) { await logMail(agency.id, mid, subject, "backfill-skip"); return; }
+      // candidates were already chosen by sender/subject/AI — no keyword gate here
       const parsed = await parseEmail(raw, { ai: Boolean(CFG.anthropicKey), apiKey: CFG.anthropicKey || undefined, email });
       if (parsed.kind === "TICKET" && parsed.pnr) {
         await upsertBooking(agency.id, parsed, extractClientMobile(email.body) ? { mobile: extractClientMobile(email.body) } : {});
@@ -703,37 +703,73 @@ async function pollGmail() {
   }
 }
 // First connect: read up to 12 months of ticket mails so every future alert has passenger names.
-const BACKFILL_Q = 'newer_than:365d -from:me -in:trash (subject:(ticket OR e-ticket OR eticket OR itinerary OR PNR OR "booking confirmation" OR "booking confirmed" OR "booking reference" OR "flight confirmation" OR "reservation confirmed" OR "travel itinerary" OR "e-ticket receipt" OR "electronic ticket" OR "ticket confirmation" OR "trip details" OR "flight details" OR "trip summary" OR ebooking OR "e-booking" OR "travel documents" OR "booking details" OR "your booking" OR reservation OR "boarding details" OR "order confirmation"))';
 async function runBackfills() {
   for (const a of AGENCIES.filter((x) => x.gmail_refresh_token && x.gmail_backfill_status === "pending")) {
     await sb.from("agencies").update({ gmail_backfill_status: "running" }).eq("id", a.id);
     a.gmail_backfill_status = "running";
-    let tickets = 0, scanned = 0;
+    let tickets = 0, fetched = 0;
     try {
-      const access = await gmailAccess(a);
-      const ids = await gmail.listIds(access, BACKFILL_Q, 600);
-      const mids = ids.map((id) => `gm-${id}`);
-      const { data: known } = await sb.from("mail_log").select("message_id").in("message_id", mids);
+      let access = await gmailAccess(a);
+      // 1. every mail of the last 12 months (no subject words), headers only
+      const ids = await gmail.listIds(access, "newer_than:365d -from:me -in:trash -in:chats", 60000);
+      await adminCard(`📚 <b>BACKFILL STARTED</b> · 🏢 ${esc(a.name)}\n${ids.length} mails in the last 12 months — scanning sender + subject of every one`);
+      const metas = [];
+      for (let i = 0; i < ids.length; i += 10) {
+        if (i % 2000 === 0) access = await gmailAccess(a);
+        const part = await Promise.all(ids.slice(i, i + 10).map((id) => gmail.getMeta(access, id).catch(() => null)));
+        metas.push(...part.filter(Boolean));
+      }
+      // 2. sure candidates by sender/subject; the rest judged by AI in batches of 50 headlines
+      const cand = new Set(); const unsure = [];
+      for (const m of metas) {
+        const subj = decodeMimeWords(m.subject), from = decodeMimeWords(m.from);
+        if (NEGATIVE_HINTS.test(subj)) continue;
+        if (AIRLINE_HINTS.test(from) || AIRLINE_SENDER.test(from) || SUBJECT_HINTS.test(subj)) cand.add(m.id);
+        else unsure.push({ id: m.id, line: `${from.slice(0, 60)} | ${subj.slice(0, 110)}` });
+      }
+      for (let i = 0; i < unsure.length; i += 50) {
+        const batch = unsure.slice(i, i + 50);
+        for (const idx of await aiPickTravel(batch.map((b) => b.line))) if (batch[idx]) cand.add(batch[idx].id);
+      }
+      // 3. download only candidates, oldest first, and save bookings
+      const ordered = metas.filter((m) => cand.has(m.id)).sort((x, y) => x.ts - y.ts);
+      const { data: known } = await sb.from("mail_log").select("message_id").neq("verdict", "backfill-skip").in("message_id", ordered.map((m) => `gm-${m.id}`).slice(0, 10000));
       const knownSet = new Set((known || []).map((r) => r.message_id));
-      await adminCard(`📚 <b>BACKFILL STARTED</b> · 🏢 ${esc(a.name)}\n${ids.length} ticket-like mails in last 12 months`);
-      for (const id of [...ids].reverse()) { // oldest first: the latest ticket for a PNR is stored last
-        if (knownSet.has(`gm-${id}`)) continue;
-        scanned++;
+      for (const m of ordered) {
+        if (knownSet.has(`gm-${m.id}`)) continue;
+        fetched++;
+        if (fetched % 300 === 0) access = await gmailAccess(a);
         try {
-          const raw = await gmail.getRaw(access, id);
-          const ok = await processRaw(raw, `gm-${id}`, splitEmail(raw).subject || "(no subject)", a, { bookingsOnly: true });
-          if (ok) tickets++;
+          await sb.from("mail_log").delete().eq("message_id", `gm-${m.id}`).eq("verdict", "backfill-skip");
+          const raw = await gmail.getRaw(access, m.id);
+          if (await processRaw(raw, `gm-${m.id}`, splitEmail(raw).subject || "(no subject)", a, { bookingsOnly: true })) tickets++;
         } catch (e) { console.error("[backfill-item]", e.message); }
       }
       await sb.from("agencies").update({ gmail_backfill_status: "done" }).eq("id", a.id);
       a.gmail_backfill_status = "done";
-      await adminCard(`📚 <b>BACKFILL DONE</b> · 🏢 ${esc(a.name)}\n${tickets} bookings saved from ${scanned} mails`);
+      await adminCard(`📚 <b>BACKFILL DONE</b> · 🏢 ${esc(a.name)}\nScanned ${metas.length} mails · ${cand.size} travel-related · ${fetched} read · <b>${tickets} bookings saved</b>`);
     } catch (e) {
       await sb.from("agencies").update({ gmail_backfill_status: "error" }).eq("id", a.id);
       a.gmail_backfill_status = "error";
       await gmailFail(a, e);
     }
   }
+}
+// AI picks which headlines (sender | subject) are airline/OTA tickets, itineraries or flight changes. Returns indices.
+async function aiPickTravel(lines) {
+  if (!CFG.anthropicKey || !lines.length) return [];
+  try {
+    const headers = { "content-type": "application/json", "x-api-key": CFG.anthropicKey, "anthropic-version": "2023-06-01" };
+    if (process.env.ANTHROPIC_WORKSPACE_ID) headers["anthropic-workspace-id"] = process.env.ANTHROPIC_WORKSPACE_ID;
+    const res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: JSON.stringify({
+      model: process.env.ANTHROPIC_CLASSIFY_MODEL || "claude-haiku-4-5-20251001", max_tokens: 300,
+      system: "Each numbered line is 'sender | subject' of an email received by a travel agency. Return ONLY a JSON array of the line numbers that are from an airline, GDS, consolidator, OTA or booking vendor AND concern a specific flight booking: e-ticket, booking/trip summary, itinerary, reservation, or a schedule change/delay/cancellation. Any language. Exclude marketing, OTPs, invoices, statements, check-in reminders. Example: [0,7,12]",
+      messages: [{ role: "user", content: lines.map((l, i) => `${i}. ${l}`).join("\n") }] }) });
+    if (!res.ok) { console.error("[ai-pick] HTTP", res.status); return []; }
+    const d = await res.json();
+    const t = d.content?.[0]?.text || "[]";
+    return JSON.parse(t.slice(t.indexOf("["), t.lastIndexOf("]") + 1)).filter((n) => Number.isInteger(n));
+  } catch (e) { console.error("[ai-pick]", e.message); return []; }
 }
 
 

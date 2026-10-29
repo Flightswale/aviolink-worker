@@ -194,6 +194,19 @@ async function pollTelegram() {
     // /retest PNR  -> forget this PNR's recent mails + alerts so the next poll re-reads them (no re-forwarding needed)
     const txt = (u.message?.text || "").trim();
     if (txt.startsWith("/report")) { await nightlyReport(true); continue; }
+    if (txt.startsWith("/backfill")) {
+      const n = AGENCIES.filter((a) => a.gmail_refresh_token);
+      for (const a of n) { await sb.from("agencies").update({ gmail_backfill_status: "pending" }).eq("id", a.id); a.gmail_backfill_status = "pending"; }
+      await tg("sendMessage", { chat_id: u.message.chat.id, text: `📚 Backfill re-queued for ${n.length} mailbox(es) — starts within a minute.` });
+      continue;
+    }
+    if (txt.startsWith("/fetch")) {
+      const key = (txt.split(/\s+/)[1] || "").toUpperCase();
+      const a = AGENCIES.find((x) => x.gmail_refresh_token);
+      if (!/^[A-Z0-9]{5,15}$/.test(key) || !a) { await tg("sendMessage", { chat_id: u.message.chat.id, text: "Usage: /fetch PNR  (needs a Gmail-connected agency)" }); continue; }
+      fetchByKey(a, key, u.message.chat.id).catch((e) => tg("sendMessage", { chat_id: u.message.chat.id, text: `❌ /fetch ${key}: ${e.message}` }));
+      continue;
+    }
     if (txt.startsWith("/status")) {
       const ago = (t) => t ? `${Math.round((Date.now() - t) / 60000)} min ago` : "never";
       const rows = AGENCIES.map((a) => {
@@ -330,7 +343,19 @@ async function handleParsed(agency, parsed, subject, messageId) {
   if (parsed.kind === "TICKET" && parsed.pnr) {
     const mobile = extractClientMobile((parsed.raw && parsed.raw.subject ? "" : "") + JSON.stringify(parsed) ) || null;
     const bodyMobile = parsed._bodyMobile || null;
+    const { data: prev } = await sb.from("bookings").select("passengers,segments,airline").eq("agency_id", agency.id).eq("pnr", parsed.pnr).maybeSingle();
+    const revision = prev ? diffItinerary(prev.segments || [], parsed.segments || []) : null;
     await upsertBooking(agency.id, parsed, bodyMobile ? { mobile: bodyMobile } : {});
+    if (revision) {
+      // A new ticket / trip summary for a PNR we already hold, with different flights or timings = schedule change.
+      const chg = { kind: "SCHEDULE_CHANGE", changeType: revision.cancelledOnly ? "CANCELLATION" : "SCHEDULE_CHANGE", pnr: parsed.pnr,
+        airline: parsed.airline || prev.airline, passengers: (parsed.passengers && parsed.passengers.length) ? parsed.passengers : (prev.passengers || []),
+        segments: revision.segments, confidence: 0.84, source: "revised-ticket", raw: parsed.raw, _bodyMobile: bodyMobile };
+      console.log(`[revised] ${agency.slug} ${parsed.pnr}: itinerary differs from stored ticket -> change alert`);
+      await logMail(agency.id, messageId, subject, "ticket", parsed.pnr + " (revised)");
+      await handleParsed(agency, chg, subject, `${messageId}#rev`);
+      return;
+    }
     await logMail(agency.id, messageId, subject, "ticket", parsed.pnr);
     await adminCard(`🎫 <b>BOOKING</b> — ${esc(parsed.pnr)} · ${tag}\n${esc((parsed.passengers||[]).join(", ")||"pax n/a")}${bodyMobile ? `\n📱 ${bodyMobile}` : ""}\n<i>${conf}% · ${esc(parsed.source)}</i>`);
     console.log(`[ticket] ${agency.slug} ${parsed.pnr} (${conf}%)`);
@@ -678,7 +703,7 @@ async function pollGmail() {
   }
 }
 // First connect: read up to 12 months of ticket mails so every future alert has passenger names.
-const BACKFILL_Q = 'newer_than:365d -from:me -in:trash (subject:(ticket OR e-ticket OR eticket OR itinerary OR PNR OR "booking confirmation" OR "booking confirmed" OR "booking reference" OR "flight confirmation" OR "reservation confirmed" OR "travel itinerary" OR "e-ticket receipt" OR "electronic ticket" OR "ticket confirmation" OR "trip details" OR "flight details"))';
+const BACKFILL_Q = 'newer_than:365d -from:me -in:trash (subject:(ticket OR e-ticket OR eticket OR itinerary OR PNR OR "booking confirmation" OR "booking confirmed" OR "booking reference" OR "flight confirmation" OR "reservation confirmed" OR "travel itinerary" OR "e-ticket receipt" OR "electronic ticket" OR "ticket confirmation" OR "trip details" OR "flight details" OR "trip summary" OR ebooking OR "e-booking" OR "travel documents" OR "booking details" OR "your booking" OR reservation OR "boarding details" OR "order confirmation"))';
 async function runBackfills() {
   for (const a of AGENCIES.filter((x) => x.gmail_refresh_token && x.gmail_backfill_status === "pending")) {
     await sb.from("agencies").update({ gmail_backfill_status: "running" }).eq("id", a.id);
@@ -691,7 +716,7 @@ async function runBackfills() {
       const { data: known } = await sb.from("mail_log").select("message_id").in("message_id", mids);
       const knownSet = new Set((known || []).map((r) => r.message_id));
       await adminCard(`📚 <b>BACKFILL STARTED</b> · 🏢 ${esc(a.name)}\n${ids.length} ticket-like mails in last 12 months`);
-      for (const id of ids) {
+      for (const id of [...ids].reverse()) { // oldest first: the latest ticket for a PNR is stored last
         if (knownSet.has(`gm-${id}`)) continue;
         scanned++;
         try {
@@ -750,6 +775,45 @@ async function findLinkedBooking(agency, email) {
     }
   } catch (e) { console.error("[linked]", e.message); }
   return null;
+}
+
+
+// Compare stored itinerary with a newly received ticket. Returns change segments or null.
+function diffItinerary(oldSegs, newSegs) {
+  const nf = (f) => String(f || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const nt = (t) => { const m = String(t || "").match(/(\d{1,2}):?(\d{2})/); return m ? m[1].padStart(2, "0") + ":" + m[2] : ""; };
+  const ns = (s) => String(s || "").toUpperCase().replace(/[^A-Z]/g, "");
+  if (!oldSegs.length || !newSegs.length) return null;
+  const used = new Set(); const out = []; let changed = false;
+  for (const n of newSegs) {
+    let oi = oldSegs.findIndex((o, i) => !used.has(i) && ns(o.sector) && ns(o.sector) === ns(n.sector));
+    if (oi < 0) oi = oldSegs.findIndex((o, i) => !used.has(i) && nf(o.flight) && nf(o.flight) === nf(n.flight));
+    if (oi < 0) { out.push({ sector: n.sector, status: "CHANGED", old: null, new: n }); changed = true; continue; }
+    used.add(oi);
+    const o = oldSegs[oi];
+    const diff = (a, b) => a && b && a !== b;
+    const isChg = diff(nf(o.flight), nf(n.flight)) || diff(o.date, n.date) || diff(nt(o.dep), nt(n.dep)) || diff(nt(o.arr), nt(n.arr));
+    if (isChg) changed = true;
+    out.push({ sector: n.sector || o.sector, status: isChg ? "CHANGED" : "UNCHANGED", old: o, new: n });
+  }
+  oldSegs.forEach((o, i) => { if (!used.has(i)) { out.push({ sector: o.sector, status: "CANCELLED", old: o, new: null }); changed = true; } });
+  if (!changed) return null;
+  return { segments: out, cancelledOnly: out.every((s) => s.status === "CANCELLED" || s.status === "UNCHANGED") && out.some((s) => s.status === "CANCELLED") };
+}
+
+
+// /fetch PNR — every mail mentioning the PNR in the last 12 months, oldest first (ticket before change).
+async function fetchByKey(a, key, chatId) {
+  const access = await gmailAccess(a);
+  const ids = (await gmail.listIds(access, `"${key}" newer_than:365d -from:me -in:trash`, 50)).reverse();
+  await tg("sendMessage", { chat_id: chatId, text: `🔎 /fetch ${key}: ${ids.length} mail(s) found in ${a.gmail_email} — processing oldest first…` });
+  if (ids.length) await sb.from("mail_log").delete().in("message_id", ids.map((id) => `gm-${id}`));
+  for (const id of ids) {
+    try { const raw = await gmail.getRaw(access, id); await processRaw(raw, `gm-${id}`, splitEmail(raw).subject || "(no subject)", a); }
+    catch (e) { console.error("[fetch]", e.message); }
+  }
+  const { data: logs } = await sb.from("mail_log").select("subject,verdict,detail").in("message_id", ids.map((id) => `gm-${id}`));
+  await tg("sendMessage", { chat_id: chatId, text: `✅ /fetch ${key} done:\n` + (logs || []).map((r) => `• ${String(r.subject).slice(0, 60)} → ${r.verdict}${r.detail ? " (" + String(r.detail).slice(0, 50) + ")" : ""}`).join("\n") });
 }
 
 // ---------- AI safety net: second opinion before any mail is skipped ----------

@@ -933,6 +933,27 @@ async function strikeAwareBody(raw) {
   } catch (e) { console.error("[body]", e.message); return null; }
 }
 
+
+async function handleWaWebhook(payload) {
+  for (const entry of payload.entry || []) for (const ch of entry.changes || []) {
+    const v = ch.value || {};
+    for (const s of v.statuses || []) {
+      console.log(`[wa-status] ${s.recipient_id} ${s.status} ${s.id}`);
+      if (s.status === "failed") {
+        const e = (s.errors || [])[0] || {};
+        await adminCard(`❌ <b>WHATSAPP NOT DELIVERED</b> to +${esc(s.recipient_id)}\nCode ${esc(e.code)} — ${esc(e.title || "")}\n${esc(e.error_data?.details || e.message || "")}`);
+      } else if (s.status === "delivered") {
+        await sb.from("alerts").update({ status: "delivered" }).eq("wa_message_id", s.id).then(() => {}, () => {});
+      }
+    }
+    for (const m of v.messages || []) {
+      const name = (v.contacts || [])[0]?.profile?.name || "";
+      const text = m.text?.body || m.button?.text || m.interactive?.button_reply?.title || `[${m.type}]`;
+      await adminCard(`💬 <b>CLIENT REPLY</b> from +${esc(m.from)}${name ? " (" + esc(name) + ")" : ""}\n${esc(String(text).slice(0, 500))}`);
+    }
+  }
+}
+
 // ---------- AI safety net: second opinion before any mail is skipped ----------
 async function aiSaysTravel(email) {
   if (!CFG.anthropicKey) return false;
@@ -998,6 +1019,17 @@ function startHttp() {
       if (u.pathname === "/privacy" || u.pathname === "/terms") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         return res.end(u.pathname === "/privacy" ? PRIVACY_HTML : TERMS_HTML);
+      }
+      // WhatsApp webhook: delivery statuses (sent/delivered/read/failed) + client replies
+      if (u.pathname === "/webhook/whatsapp") {
+        if (req.method === "GET") {
+          const ok = u.searchParams.get("hub.mode") === "subscribe" && u.searchParams.get("hub.verify_token") === (process.env.WA_VERIFY_TOKEN || "aviolink-wa-verify");
+          res.writeHead(ok ? 200 : 403, { "content-type": "text/plain" }); return res.end(ok ? (u.searchParams.get("hub.challenge") || "") : "forbidden");
+        }
+        let body = ""; for await (const chunk of req) body += chunk;
+        res.writeHead(200); res.end("ok");
+        try { await handleWaWebhook(JSON.parse(body || "{}")); } catch (e) { console.error("[wa-webhook]", e.message); }
+        return;
       }
       if (u.pathname === "/health") { res.writeHead(200, { "content-type": "text/plain" }); return res.end("ok"); }
       const page = (title, msg) => { res.writeHead(200, { "content-type": "text/html; charset=utf-8" });

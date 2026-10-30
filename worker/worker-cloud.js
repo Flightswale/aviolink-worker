@@ -165,6 +165,45 @@ async function deliverClientWhatsApp(target, payload, agency, text) {
   return { ...r, via: "text" };
 }
 
+// ---------- send one alert to the client (dashboard, Telegram approve, auto-send) ----------
+async function sendAlertToClient(alertId, { mobile = null, actor = "telegram", fallbackOwner = false } = {}) {
+  if (!WA.enabled()) return { ok: false, err: "WhatsApp is not configured on the server" };
+  const { data: al } = await sb.from("alerts").select("id,agency_id,pnr,status,compiled_whatsapp,payload").eq("id", alertId).maybeSingle();
+  if (!al) return { ok: false, err: "alert not found" };
+  const p = al.payload || {};
+  if (al.status === "awaiting_data" || !al.pnr || !(p.passengers || []).length) return { ok: false, err: "Passenger details are not complete yet — waiting for the ticket" };
+  const ag = AGENCIES.find((a) => a.id === al.agency_id);
+  if (ag?.status === "suspended") return { ok: false, err: "Agency is suspended" };
+  let target = mobile ? normMobile(mobile) : null, who = "client";
+  if (mobile && !target) return { ok: false, err: "Mobile number is not valid" };
+  if (target) {
+    await sb.from("bookings").update({ mobile: String(mobile).replace(/[^\d+]/g, "") }).eq("agency_id", al.agency_id).eq("pnr", al.pnr).then(() => {}, () => {});
+  } else {
+    const { data: bk } = await sb.from("bookings").select("mobile").eq("agency_id", al.agency_id).eq("pnr", al.pnr).maybeSingle();
+    if (bk?.mobile) target = bk.mobile;
+    else if (fallbackOwner && (ag?.whatsapp || ag?.owner_phone)) { target = ag.whatsapp || ag.owner_phone; who = "agency owner"; }
+  }
+  if (!target) return { ok: false, err: "No client mobile on file — enter it" };
+  const r = await deliverClientWhatsApp(target, p, ag, al.compiled_whatsapp);
+  const now = new Date().toISOString();
+  if (r.ok) {
+    const full = await sb.from("alerts").update({ status: "sent", sent_at: now, client_status: "sent", client_mobile: String(target), wa_message_id: r.id || null, wa_error: null, sent_by: actor }).eq("id", al.id);
+    if (full.error) await sb.from("alerts").update({ status: "sent", sent_at: now }).eq("id", al.id);
+    if (actor !== "telegram") await adminCard(`📲 <b>SENT</b> ${esc(al.pnr)} → ${who} +${esc(normMobile(target))} · 🏢 ${esc(ag?.name || "")}
+by ${esc(actor)}`).catch(() => {});
+  } else {
+    await sb.from("alerts").update({ client_status: "failed", wa_error: String(r.err).slice(0, 300), client_mobile: String(target) }).eq("id", al.id).then(() => {}, () => {});
+  }
+  return { ...r, target: String(target), who };
+}
+// Auto-send (agency setting): only complete, confident alerts with a client mobile on file.
+async function maybeAutoSend(agency, alertId, payload) {
+  if (!agency?.auto_send || !alertId || !WA.enabled() || !trialActive(agency)) return;
+  if ((payload?.confidence || 0) < 0.85) return;
+  const r = await sendAlertToClient(alertId, { actor: "auto-send" });
+  if (!r.ok) await adminCard(`⏸ Auto-send skipped for ${esc(payload?.pnr || "")} · 🏢 ${esc(agency.name)}: ${esc(r.err)}`).catch(() => {});
+}
+
 // ---------- agency directory (refreshed every 5 min) ----------
 let AGENCIES = [];
 let DEFAULT_AGENCY = null;
@@ -178,6 +217,8 @@ async function loadAgencies() {
   }
   if (error) { console.error("[agencies-error]", error.message); return; }
   AGENCIES = data || [];
+  const ext = await sb.from("agencies").select("id,status,auto_send");
+  if (!ext.error) { const m = new Map(ext.data.map((x) => [x.id, x])); for (const a of AGENCIES) Object.assign(a, { status: m.get(a.id)?.status || "active", auto_send: Boolean(m.get(a.id)?.auto_send) }); }
   DEFAULT_AGENCY = AGENCIES.find((a) => a.slug === CFG.agencySlug) || AGENCIES[0] || null;
   console.log(`[agencies] loaded ${AGENCIES.length} (default: ${DEFAULT_AGENCY?.name})`);
 }
@@ -209,7 +250,7 @@ function resolveAgency(rawHead, email) {
   return DEFAULT_AGENCY;
 }
 function trialActive(a) {
-  if (!a) return false;
+  if (!a || a.status === "suspended") return false;
   if (a.plan !== "trial") return true; // paid/starter/etc.
   return !a.trial_ends_at || new Date(a.trial_ends_at) > new Date();
 }
@@ -308,32 +349,9 @@ async function pollTelegram() {
     if (alertId && !["sweep","review","no-pnr"].includes(alertId)) {
       await sb.from("alerts").update({ status, approved_at: new Date().toISOString() }).eq("id", alertId);
       if (action === "ap" && WA.enabled()) {
-        // Deliver to client WhatsApp (booking mobile) or agency owner as fallback.
         try {
-          const { data: al } = await sb.from("alerts").select("agency_id,pnr,compiled_whatsapp,payload").eq("id", alertId).single();
-          if (al) {
-            let target = null, who = "";
-            if (al.pnr) {
-              const { data: bk } = await sb.from("bookings").select("mobile").eq("agency_id", al.agency_id).eq("pnr", al.pnr).maybeSingle();
-              if (bk?.mobile) { target = bk.mobile; who = "client"; }
-            }
-            if (!target) {
-              const ag = AGENCIES.find((a) => a.id === al.agency_id);
-              if (ag?.whatsapp || ag?.owner_phone) { target = ag.whatsapp || ag.owner_phone; who = "agency owner"; }
-            }
-            if (target) {
-              const ag = AGENCIES.find((a) => a.id === al.agency_id);
-              const r = await deliverClientWhatsApp(target, al.payload, ag, al.compiled_whatsapp);
-              if (r.ok) {
-                await sb.from("alerts").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", alertId);
-                await tg("sendMessage", { chat_id: u.callback_query.message.chat.id, text: `📲 WhatsApp delivered to ${who} (${target}) via ${r.via}` });
-              } else {
-                await tg("sendMessage", { chat_id: u.callback_query.message.chat.id, text: `⚠️ WhatsApp failed (${r.err}).\nTest-mode tip: the recipient must be a verified test number AND must message the test number once ("hi") to open the 24h window.` });
-              }
-            } else {
-              await tg("sendMessage", { chat_id: u.callback_query.message.chat.id, text: `ℹ️ No mobile on file for this PNR — approved only. Add via ticket capture or bookings table.` });
-            }
-          }
+          const r = await sendAlertToClient(alertId, { actor: "telegram", fallbackOwner: true });
+          await tg("sendMessage", { chat_id: u.callback_query.message.chat.id, text: r.ok ? `📲 WhatsApp sent to ${r.who} (${r.target}) via ${r.via} — delivery status follows` : `⚠️ Not sent: ${r.err}` });
         } catch (e) { console.error("[wa-error]", e.message); }
       }
     }
@@ -458,6 +476,7 @@ async function handleParsed(agency, parsed, subject, messageId) {
           const msg2 = compile(p, { name: agency.name, phone: agency.owner_phone || agency.whatsapp || "" });
           await sb.from("alerts").update({ pnr: p.pnr, payload: p, compiled_whatsapp: msg2.whatsapp, status: "pending" }).eq("id", al.id);
           if (trialActive(agency)) await deliverToAgency(agency, p, msg2, al.id);
+          await maybeAutoSend(agency, al.id, p);
           await adminCard(`✅ <b>ALERT COMPLETED</b> with passenger details · ${tag}\n\n<pre>${esc(msg2.whatsapp)}</pre>`, al.id);
           console.log(`[complete] alert ${al.id} filled from ticket ${parsed.pnr}`);
         }
@@ -529,6 +548,7 @@ async function handleParsed(agency, parsed, subject, messageId) {
       await sb.from("alerts").update({ status: "awaiting_data" }).eq("id", alertId);
       deliveredNote = `\n⏸ <b>HELD — incomplete data, not delivered.</b> Will auto-complete & deliver when the ticket arrives.`;
     } else if (trialActive(agency)) {
+      await maybeAutoSend(agency, alertId, parsed);
       const ok = await deliverToAgency(agency, parsed, msg, alertId);
       deliveredNote = ok ? `\n📬 delivered to ${esc(agency.notify_email)}` : `\n⚠️ delivery failed`;
     } else {
@@ -759,7 +779,7 @@ async function gmailFail(a, e) {
 // Mails the agent SENT are never read (-from:me), spam IS read (airline mails land there), trash is not.
 const GMAIL_LIVE_Q = "newer_than:3d -from:me -in:trash -in:chats";
 async function pollGmail() {
-  for (const a of AGENCIES.filter((x) => x.gmail_refresh_token)) {
+  for (const a of AGENCIES.filter((x) => x.gmail_refresh_token && x.status !== "suspended")) {
     try {
       const access = await gmailAccess(a);
       const ids = await gmail.listIds(access, GMAIL_LIVE_Q, 300);
@@ -954,8 +974,14 @@ async function handleWaWebhook(payload) {
       if (s.status === "failed") {
         const e = (s.errors || [])[0] || {};
         await adminCard(`❌ <b>WHATSAPP NOT DELIVERED</b> to +${esc(s.recipient_id)}\nCode ${esc(e.code)} — ${esc(e.title || "")}\n${esc(e.error_data?.details || e.message || "")}`);
-      } else if (s.status === "delivered") {
-        await sb.from("alerts").update({ status: "delivered" }).eq("wa_message_id", s.id).then(() => {}, () => {});
+      }
+      const rank = { sent: 1, delivered: 2, read: 3, failed: 9 };
+      if (rank[s.status]) {
+        const { data: al } = await sb.from("alerts").select("id,client_status").eq("wa_message_id", s.id).maybeSingle().then((x) => x, () => ({}));
+        if (al && (rank[s.status] > (rank[al.client_status] || 0))) {
+          const e = (s.errors || [])[0] || {};
+          await sb.from("alerts").update({ client_status: s.status, ...(s.status === "failed" ? { wa_error: `${e.code || ""} ${e.title || ""} ${e.error_data?.details || ""}`.trim().slice(0, 300) } : {}) }).eq("id", al.id);
+        }
       }
     }
     for (const m of v.messages || []) {
@@ -1022,7 +1048,9 @@ async function nightlyReport(force = false) {
 }
 
 // ---------- HTTP: OAuth callback + health ----------
+let DASH = null;
 function startHttp() {
+  DASH = require("./dashboard")({ sb, gmail, getAgencies: () => AGENCIES, loadAgencies, GMAIL_HEALTH, sendAlertToClient, adminCard, esc, waEnabled: () => WA.enabled() });
   const port = Number(process.env.PORT || 8080);
   const site = (process.env.SITE_URL || "https://aviolink.in").replace(/\/$/, "");
   http.createServer(async (req, res) => {
@@ -1043,6 +1071,7 @@ function startHttp() {
         try { await handleWaWebhook(JSON.parse(body || "{}")); } catch (e) { console.error("[wa-webhook]", e.message); }
         return;
       }
+      if (await DASH.handle(req, res, u)) return;
       if (u.pathname === "/health") { res.writeHead(200, { "content-type": "text/plain" }); return res.end("ok"); }
       const page = (title, msg) => { res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         return res.end(`<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>Aviolink</title><body style="font-family:system-ui;background:#eef2fb;display:grid;place-items:center;min-height:100vh;margin:0"><div style="background:#fff;padding:32px;border-radius:14px;max-width:420px;text-align:center;box-shadow:0 8px 30px rgba(30,39,97,.15)"><h2 style="color:#1E2761">${title}</h2><p style="color:#374151;line-height:1.5">${msg}</p></div>`); };

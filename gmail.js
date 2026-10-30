@@ -35,6 +35,11 @@ function authUrl(agencyId) {
   return `https://accounts.google.com/o/oauth2/v2/auth?${q}`;
 }
 
+// Dashboard login: identity only (email), no mailbox access.
+function loginUrl(state) {
+  const q = new URLSearchParams({ client_id: CID, redirect_uri: REDIRECT, response_type: "code", scope: "openid email", prompt: "select_account", state });
+  return `https://accounts.google.com/o/oauth2/v2/auth?${q}`;
+}
 async function tokenPost(body) {
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -77,4 +82,4 @@ async function getRaw(access, id) {
   return Buffer.from(String(m.raw || "").replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
 }
 
-module.exports = { enabled, authUrl, verifyState, exchangeCode, refreshAccess, profile, listIds, getRaw, getMeta, PUBLIC_URL };
+module.exports = { loginUrl, enabled, authUrl, verifyState, exchangeCode, refreshAccess, profile, listIds, getRaw, getMeta, PUBLIC_URL };

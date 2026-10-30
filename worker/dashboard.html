@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Aviolink Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--navy:#1E2761;--navy2:#2b3680;--ink:#111827;--mut:#6b7280;--line:#e5e7eb;--bg:#f4f6fb;--card:#fff;--ok:#047857;--okb:#d1fae5;--warn:#b45309;--warnb:#fef3c7;--bad:#b91c1c;--badb:#fee2e2;--info:#1d4ed8;--infob:#dbeafe}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--ink);font-size:14px}
+a{color:var(--navy2)}
+button{font:inherit;cursor:pointer}
+.top{background:var(--navy);color:#fff;display:flex;align-items:center;gap:16px;padding:0 20px;height:56px;position:sticky;top:0;z-index:5}
+.logo{font-weight:700;font-size:18px;letter-spacing:.2px}
+.logo span{color:#f5c542}
+.top .ag{opacity:.85;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.top .sp{flex:1}
+.top .me{opacity:.7;font-size:13px}
+.top a.out{color:#fff;opacity:.8;text-decoration:none;font-size:13px;border:1px solid rgba(255,255,255,.3);padding:6px 10px;border-radius:8px}
+.wrap{display:flex;min-height:calc(100vh - 56px)}
+nav{width:210px;background:#fff;border-right:1px solid var(--line);padding:14px 10px;flex-shrink:0}
+nav button{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:0;padding:10px 12px;border-radius:8px;color:#374151;font-weight:500}
+nav button:hover{background:#f3f4f6}
+nav button.on{background:#eef1fb;color:var(--navy);font-weight:600}
+nav .badge{margin-left:auto;background:var(--bad);color:#fff;border-radius:10px;padding:1px 7px;font-size:12px}
+main{flex:1;padding:22px;max-width:1100px;min-width:0}
+h1{font-size:20px;margin:0 0 4px}
+.sub{color:var(--mut);margin:0 0 18px}
+.banner{background:#fff7e6;border:1px solid #f5c542;color:#7a5200;padding:10px 14px;border-radius:10px;margin-bottom:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.chip{border:1px solid var(--line);background:#fff;border-radius:20px;padding:6px 12px;color:#374151;font-weight:500}
+.chip.on{background:var(--navy);border-color:var(--navy);color:#fff}
+.chip b{font-weight:700;margin-left:4px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:12px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.pnr{font-weight:700;font-size:16px;letter-spacing:.5px}
+.pill{display:inline-block;border-radius:20px;padding:2px 10px;font-size:12px;font-weight:600}
+.p-ok{background:var(--okb);color:var(--ok)}.p-warn{background:var(--warnb);color:var(--warn)}.p-bad{background:var(--badb);color:var(--bad)}.p-info{background:var(--infob);color:var(--info)}.p-mut{background:#f3f4f6;color:#4b5563}
+.mut{color:var(--mut)}
+.legs{margin:12px 0;display:grid;gap:6px}
+.leg{display:grid;grid-template-columns:110px 1fr;gap:8px;font-size:13px}
+.leg .old{text-decoration:line-through;color:var(--mut)}
+.leg .new{font-weight:600}
+.act{display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:12px;margin-top:4px}
+input,select{font:inherit;border:1px solid #d1d5db;border-radius:8px;padding:8px 10px;background:#fff;min-width:0}
+input:focus{outline:2px solid #c7d0f5;border-color:var(--navy2)}
+.btn{border:0;border-radius:8px;padding:9px 14px;font-weight:600}
+.btn.pri{background:var(--navy);color:#fff}.btn.pri:hover{background:var(--navy2)}
+.btn.ghost{background:#fff;border:1px solid var(--line);color:#374151}
+.btn.green{background:#16a34a;color:#fff}
+.btn:disabled{opacity:.5;cursor:default}
+pre.msg{white-space:pre-wrap;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;font-family:inherit;font-size:13px;margin:10px 0 0}
+table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top;font-size:13px}
+th{background:#f9fafb;color:#4b5563;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.3px}
+tr:last-child td{border-bottom:0}
+.tablewrap{overflow-x:auto}
+.empty{text-align:center;color:var(--mut);padding:40px 10px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.field{display:grid;gap:6px;margin-bottom:14px}
+.field label{font-weight:600;font-size:13px}
+.field small{color:var(--mut)}
+.toggle{display:flex;gap:10px;align-items:flex-start}
+.toggle input{width:18px;height:18px;margin-top:2px}
+.kv{display:grid;grid-template-columns:150px 1fr;gap:8px 12px}
+.kv div:nth-child(odd){color:var(--mut)}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:10px 16px;border-radius:10px;opacity:0;transition:.2s;pointer-events:none;z-index:20;max-width:90vw}
+.toast.on{opacity:1}
+.login{min-height:100vh;display:grid;place-items:center;background:linear-gradient(160deg,#1E2761,#34418f)}
+.login .box{background:#fff;border-radius:16px;padding:36px 32px;width:min(400px,92vw);text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.25)}
+.login h2{margin:8px 0 6px;color:var(--navy)}
+.gbtn{display:inline-flex;align-items:center;gap:10px;border:1px solid #d1d5db;border-radius:8px;padding:11px 18px;background:#fff;font-weight:600;color:#111827;text-decoration:none;margin-top:18px}
+.err{background:var(--badb);color:var(--bad);border-radius:8px;padding:10px;margin-top:16px;font-size:13px}
+@media(max-width:760px){
+  .wrap{flex-direction:column}
+  nav{width:auto;display:flex;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:6px}
+  nav button{width:auto;white-space:nowrap}
+  main{padding:16px}
+  .top .me{display:none}
+  .leg{grid-template-columns:1fr}
+  .kv{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="toast" id="toast"></div>
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const h = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const LOGIN = location.hostname.startsWith("app.") ? "/login" : "/login";
+let ME = null, VIEW = "", FILTER = "tosend", MAILF = "", CACHE = {};
+
+function toast(t) { const el = $("#toast"); el.textContent = t; el.classList.add("on"); clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove("on"), 3500); }
+async function api(path, opts = {}) {
+  const r = await fetch(path, { credentials: "same-origin", ...opts, headers: { "content-type": "application/json", "x-av": "1", ...(opts.headers || {}) } });
+  if (r.status === 401) { ME = null; renderLogin(); throw new Error("login"); }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || d.err || ("Error " + r.status));
+  return d;
+}
+const post = (path, data) => api(path, { method: "POST", body: JSON.stringify(data || {}) });
+function when(t) {
+  if (!t) return "-";
+  const d = new Date(t), now = Date.now(), m = Math.round((now - d) / 60000);
+  if (m < 1) return "just now"; if (m < 60) return m + " min ago"; if (m < 1440) return Math.round(m / 60) + " h ago";
+  return d.toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+function dmy(s) { if (!s || !/^\d{4}-\d{2}-\d{2}/.test(s)) return s || ""; return Number(s.slice(8, 10)) + " " + MON[Number(s.slice(5, 7)) - 1]; }
+function legTxt(l) { if (!l) return ""; return [l.flight, dmy(l.date), (l.dep || "--:--") + "–" + (l.arr || "--:--") + (l.arrDayOffset ? " (+" + l.arrDayOffset + ")" : "")].filter(Boolean).join(" · "); }
+function title(n) { return String(n || "").toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()); }
+
+// ---------- login ----------
+function renderLogin() {
+  const q = new URLSearchParams(location.search), e = q.get("e");
+  const msg = e === "noaccount" ? `No Aviolink account is linked to <b>${h(q.get("m"))}</b>. Sign in with the Gmail you connected to Aviolink, or contact support@aviolink.in.`
+    : e === "suspended" ? "This agency account is paused. Please contact support@aviolink.in."
+    : e === "login" ? "Sign-in did not complete. Please try again." : "";
+  $("#app").innerHTML = `<div class="login"><div class="box">
+    <div class="logo" style="color:var(--navy);font-size:24px">Avio<span style="color:#d4a017">link</span></div>
+    <h2>Agency Dashboard</h2><p class="mut">Flight change alerts for your clients</p>
+    <a class="gbtn" href="${LOGIN}"><svg width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.6-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.5z"/></svg>Sign in with Google</a>
+    ${msg ? `<div class="err">${msg}</div>` : ""}
+  </div></div>`;
+}
+
+// ---------- shell ----------
+function navItems() {
+  if (ME.admin && !ME.actAs) return [["agencies", "🏢 Agencies"], ["alerts", "⚡ All alerts"], ["skipped", "🔍 Skipped mail"]];
+  return [["alerts", "⚡ Alerts"], ["bookings", "🎫 Bookings"], ["mail", "📨 Mail log"], ["gmail", "📬 Gmail"], ["settings", "⚙️ Settings"]];
+}
+function shell() {
+  const items = navItems();
+  if (!items.some((i) => i[0] === VIEW)) VIEW = items[0][0];
+  $("#app").innerHTML = `<div class="top"><div class="logo">Avio<span>link</span></div>
+      <div class="ag">${ME.agency && (!ME.admin || ME.actAs) ? h(ME.agency.name) : ME.admin ? "Admin" : ""}</div><div class="sp"></div>
+      <div class="me">${h(ME.email)}</div><a class="out" href="/logout">Log out</a></div>
+    <div class="wrap"><nav>${items.map(([k, t]) => `<button data-v="${k}" class="${k === VIEW ? "on" : ""}">${t}<span class="badge" id="b-${k}" hidden></span></button>`).join("")}</nav>
+    <main id="main"></main></div>`;
+  document.querySelectorAll("nav button").forEach((b) => b.onclick = () => { VIEW = b.dataset.v; shell(); });
+  render();
+}
+function actAsBanner() {
+  return ME.admin && ME.actAs ? `<div class="banner">👁 Viewing as <b>${h(ME.agency.name)}</b> — anything you send goes out for this agency. <button class="btn ghost" id="backadmin">Back to admin</button></div>` : "";
+}
+async function render() {
+  const m = $("#main");
+  m.innerHTML = actAsBanner() + `<div class="empty">Loading…</div>`;
+  const ba = $("#backadmin"); if (ba) ba.onclick = async () => { await post("/api/admin/actas", { agencyId: null }); await boot(); };
+  try {
+    if (VIEW === "alerts") await vAlerts(m);
+    else if (VIEW === "bookings") await vBookings(m);
+    else if (VIEW === "mail") await vMail(m, false);
+    else if (VIEW === "skipped") await vMail(m, true);
+    else if (VIEW === "gmail") vGmail(m);
+    else if (VIEW === "settings") vSettings(m);
+    else if (VIEW === "agencies") await vAgencies(m);
+  } catch (e) { if (e.message !== "login") m.innerHTML = actAsBanner() + `<div class="err">${h(e.message)}</div>`; }
+  const ba2 = $("#backadmin"); if (ba2) ba2.onclick = async () => { await post("/api/admin/actas", { agencyId: null }); await boot(); };
+}
+
+// ---------- alerts ----------
+function bucket(a) {
+  if (a.status === "awaiting_data") return "waiting";
+  if (["sent", "delivered", "read"].includes(a.client_status)) return "sent";
+  if (a.client_status === "ignored" || a.status === "skipped") return "ignored";
+  if (a.client_status === "failed") return "tosend";
+  if (["sent", "delivered"].includes(a.status)) return "sent";
+  return "tosend";
+}
+function statusPill(a) {
+  const b = bucket(a);
+  if (b === "waiting") return `<span class="pill p-warn">Waiting for ticket</span>`;
+  if (b === "ignored") return `<span class="pill p-mut">Ignored</span>`;
+  if (b === "sent") { const s = a.client_status || "sent"; return `<span class="pill ${s === "read" ? "p-ok" : "p-info"}">${s === "read" ? "✓✓ Read" : s === "delivered" ? "✓✓ Delivered" : "✓ Sent"}</span>`; }
+  if (a.client_status === "failed") return `<span class="pill p-bad">Not delivered</span>`;
+  return `<span class="pill p-bad">To send</span>`;
+}
+async function vAlerts(m) {
+  const all = ME.admin && !ME.actAs;
+  const list = await api("/api/alerts" + (all ? "?all=1" : ""));
+  CACHE.alerts = list;
+  const cnt = (k) => list.filter((a) => bucket(a) === k).length;
+  const badge = $("#b-alerts"); if (badge) { const n = cnt("tosend"); badge.hidden = !n; badge.textContent = n; }
+  const F = [["tosend", "To send"], ["waiting", "Waiting for ticket"], ["sent", "Sent"], ["ignored", "Ignored"], ["all", "All"]];
+  const shown = list.filter((a) => FILTER === "all" || bucket(a) === FILTER);
+  m.innerHTML = actAsBanner() + `<h1>${all ? "All alerts" : "Alerts"}</h1><p class="sub">Schedule changes and cancellations from the last 60 days.${all ? " Every agency." : " Check the details, then send to your client on WhatsApp."}</p>
+    <div class="chips">${F.map(([k, t]) => `<button class="chip ${FILTER === k ? "on" : ""}" data-f="${k}">${t}<b>${k === "all" ? list.length : cnt(k)}</b></button>`).join("")}</div>
+    <div id="alist">${shown.length ? shown.map((a) => alertCard(a, all)).join("") : `<div class="card empty">${FILTER === "tosend" ? "Nothing waiting. New changes will appear here." : "No alerts here."}</div>`}</div>`;
+  m.querySelectorAll(".chip").forEach((c) => c.onclick = () => { FILTER = c.dataset.f; vAlerts(m); });
+  m.querySelectorAll("[data-send]").forEach((b) => b.onclick = () => sendAlert(b.dataset.send, m));
+  m.querySelectorAll("[data-ign]").forEach((b) => b.onclick = async () => { if (!confirm("Ignore this alert? The client will not be informed.")) return; b.disabled = true; try { await post(`/api/alerts/${b.dataset.ign}/ignore`); toast("Ignored"); vAlerts(m); } catch (e) { toast(e.message); b.disabled = false; } });
+  m.querySelectorAll("[data-prev]").forEach((b) => b.onclick = () => { const p = $("#pv-" + b.dataset.prev); p.hidden = !p.hidden; });
+}
+function alertCard(a, showAgency) {
+  const p = a.payload || {}, pax = (p.passengers || []).map(title);
+  const cancel = (a.change_type || p.changeType) === "CANCELLATION";
+  const b = bucket(a);
+  const legs = (p.segments || []).map((s) => {
+    const st = s.status === "CANCELLED" || (s.old && !s.new) ? `<span class="pill p-bad">Cancelled</span>` : "";
+    return `<div class="leg"><div class="mut">${h(String(s.sector || "").replace(/\s*(→|->)\s*/, "–"))}</div><div>${s.old ? `<span class="old">${h(legTxt(s.old))}</span><br>` : ""}${s.new ? `<span class="new">${h(legTxt(s.new))}</span>` : st || h(legTxt(s))}</div></div>`;
+  }).join("");
+  const canSend = b === "tosend";
+  return `<div class="card"><div class="row"><span class="pnr">${h(a.pnr || "No PNR")}</span>
+      <span class="pill ${cancel ? "p-bad" : "p-warn"}">${cancel ? "Cancellation" : "Schedule change"}</span>${statusPill(a)}
+      ${showAgency ? `<span class="pill p-info">🏢 ${h(a.agency)}</span>` : ""}<span class="mut" style="margin-left:auto">${when(a.created_at)}</span></div>
+    <div style="margin-top:8px">👤 ${pax.length ? h(pax.join(", ")) : `<span class="mut">Passenger names not yet available</span>`}${p.airline ? ` · <span class="mut">${h(p.airline)}</span>` : ""}</div>
+    <div class="legs">${legs || `<span class="mut">No flight details</span>`}</div>
+    ${a.client_status === "failed" ? `<div class="err" style="margin:0 0 10px">WhatsApp not delivered${a.wa_error ? ": " + h(a.wa_error) : ""}. Check the number and send again.</div>` : ""}
+    ${b === "sent" ? `<div class="mut">Sent to ${h(a.client_mobile || "client")} ${a.sent_at ? when(a.sent_at) : ""}${a.sent_by ? " by " + h(a.sent_by) : ""}</div>` : ""}
+    ${b === "waiting" ? `<div class="mut">Held until the ticket with passenger names arrives in your mailbox — then it moves to “To send”.</div>` : ""}
+    <div class="act">
+      ${canSend ? `<input id="mob-${a.id}" placeholder="Client mobile e.g. 9876543210" value="${h(a.client_mobile)}" style="width:220px">
+      <button class="btn green" data-send="${a.id}" ${ME.waReady ? "" : "disabled title='WhatsApp not configured'"}>Send on WhatsApp</button>
+      <button class="btn ghost" data-ign="${a.id}">Ignore</button>` : ""}
+      <button class="btn ghost" data-prev="${a.id}">Preview message</button>
+    </div>
+    <pre class="msg" id="pv-${a.id}" hidden>${h(a.text)}</pre></div>`;
+}
+async function sendAlert(id, m) {
+  const inp = $("#mob-" + id), mobile = (inp?.value || "").trim();
+  if (mobile.replace(/\D/g, "").length < 10) { toast("Enter the client's mobile number"); inp?.focus(); return; }
+  const a = (CACHE.alerts || []).find((x) => x.id === id);
+  if (!confirm(`Send the ${a?.pnr || ""} alert to ${mobile} on WhatsApp?`)) return;
+  const btn = document.querySelector(`[data-send="${id}"]`); btn.disabled = true; btn.textContent = "Sending…";
+  try { await post(`/api/alerts/${id}/send`, { mobile }); toast("✓ Sent — delivery status will update here"); FILTER = "sent"; vAlerts(m); }
+  catch (e) { toast("Not sent: " + e.message); btn.disabled = false; btn.textContent = "Send on WhatsApp"; }
+}
+
+// ---------- bookings ----------
+async function vBookings(m, q = "") {
+  const list = await api("/api/bookings" + (q ? "?q=" + encodeURIComponent(q) : ""));
+  m.innerHTML = actAsBanner() + `<h1>Bookings</h1><p class="sub">Tickets Aviolink has read from your mailbox. A change on any of these PNRs creates an alert.</p>
+    <div class="row" style="margin-bottom:14px"><input id="bq" placeholder="Search PNR" value="${h(q)}" style="width:200px"><button class="btn ghost" id="bgo">Search</button><span class="mut">${list.length} shown</span></div>
+    ${list.length ? `<div class="tablewrap"><table><tr><th>PNR</th><th>Passengers</th><th>Flights</th><th>Client mobile</th><th>Saved</th></tr>
+    ${list.map((b) => `<tr><td><b>${h(b.pnr)}</b><br><span class="mut">${h(b.airline || "")}</span></td><td>${h((b.passengers || []).map(title).join(", ") || "-")}</td>
+      <td>${(b.segments || []).map((s) => `${h(s.flight || "")} ${h(String(s.sector || "").replace(/\s*(→|->)\s*/, "–"))} ${h(dmy(s.date))} ${h(s.dep || "")}`).join("<br>") || "-"}</td>
+      <td>${h(b.mobile || "-")}</td><td class="mut">${when(b.created_at)}</td></tr>`).join("")}</table></div>` : `<div class="card empty">No bookings found.</div>`}`;
+  const go = () => vBookings(m, $("#bq").value.trim());
+  $("#bgo").onclick = go; $("#bq").onkeydown = (e) => { if (e.key === "Enter") go(); };
+}
+
+// ---------- mail log ----------
+const VERD = { ticket: ["Ticket saved", "p-ok"], change: ["Change alert", "p-warn"], info: ["Info only", "p-info"], review: ["Unrecognised", "p-bad"], dup: ["Duplicate", "p-mut"], skip: ["Not travel", "p-mut"] };
+async function vMail(m, skippedOnly) {
+  const all = ME.admin && !ME.actAs;
+  const v = skippedOnly ? (MAILF || "review,skip,info") : MAILF;
+  const list = await api(`/api/mail?days=${skippedOnly ? 14 : 7}${v ? "&verdict=" + v : ""}${all ? "&all=1" : ""}`);
+  const F = skippedOnly ? [["review,skip,info", "All skipped"], ["review", "Unrecognised"], ["skip", "Not travel"], ["info", "Info only"]]
+    : [["", "All"], ["ticket", "Tickets"], ["change", "Changes"], ["review", "Unrecognised"], ["info", "Info only"], ["skip", "Not travel"]];
+  m.innerHTML = actAsBanner() + `<h1>${skippedOnly ? "Skipped mail — all agencies" : "Mail log"}</h1>
+    <p class="sub">${skippedOnly ? "Last 14 days. Check “Unrecognised” first — any real change there is a miss." : "Every mail Aviolink read in the last 7 days and what it decided."}</p>
+    <div class="chips">${F.map(([k, t]) => `<button class="chip ${v === k || (!v && !k) ? "on" : ""}" data-m="${k}">${t}</button>`).join("")}</div>
+    ${list.length ? `<div class="tablewrap"><table><tr><th>Time</th>${all ? "<th>Agency</th>" : ""}<th>Subject</th><th>Result</th></tr>
+    ${list.map((r) => `<tr><td class="mut" style="white-space:nowrap">${when(r.created_at)}</td>${all ? `<td>${h(r.agency)}</td>` : ""}<td>${h(r.subject)}${r.detail ? `<br><span class="mut">${h(String(r.detail).slice(0, 140))}</span>` : ""}</td>
+      <td><span class="pill ${(VERD[r.verdict] || ["", "p-mut"])[1]}">${h((VERD[r.verdict] || [r.verdict])[0])}</span></td></tr>`).join("")}</table></div>` : `<div class="card empty">No mail in this view.</div>`}`;
+  m.querySelectorAll("[data-m]").forEach((c) => c.onclick = () => { MAILF = c.dataset.m; vMail(m, skippedOnly); });
+}
+
+// ---------- gmail ----------
+function vGmail(m) {
+  const g = ME.agency.gmail || {};
+  const healthy = g.email && g.last_ok && Date.now() - g.last_ok < 15 * 60000;
+  m.innerHTML = actAsBanner() + `<h1>Gmail connection</h1><p class="sub">Aviolink reads your airline and vendor mails (read-only) to find changes. It never sends or deletes mail.</p>
+    <div class="card"><div class="row" style="margin-bottom:14px">${g.email ? (healthy ? `<span class="pill p-ok">● Connected and reading</span>` : `<span class="pill p-warn">● Connected — not read recently</span>`) : `<span class="pill p-bad">● Not connected</span>`}</div>
+    <div class="kv"><div>Mailbox</div><div><b>${h(g.email || "-")}</b></div>
+      <div>Connected on</div><div>${g.connected_at ? new Date(g.connected_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "-"}</div>
+      <div>Last read</div><div>${g.last_ok ? when(g.last_ok) : "-"}</div>
+      <div>Past 12 months scan</div><div>${{ done: "Completed", running: "In progress", pending: "Starting", error: "Stopped with an error" }[g.backfill] || "-"}</div>
+      ${g.error && !healthy ? `<div>Last problem</div><div style="color:var(--bad)">${h(String(g.error).slice(0, 200))}</div>` : ""}</div>
+    <div class="act" style="margin-top:16px"><a class="btn pri" style="text-decoration:none" href="/api/gmail/connect">${g.email ? "Reconnect Gmail" : "Connect Gmail"}</a>
+      <span class="mut">Use this if you changed your Google password or the status above is not green.</span></div></div>`;
+}
+
+// ---------- settings ----------
+function vSettings(m) {
+  const a = ME.agency;
+  m.innerHTML = actAsBanner() + `<h1>Settings</h1><p class="sub">How your agency appears to clients.</p>
+    <div class="grid2"><div class="card">
+      <div class="field"><label>Agency name</label><input id="s-name" value="${h(a.name)}"><small>Shown in the client message: “For any queries, please contact <b>${h(a.name)}</b> …”</small></div>
+      <div class="field"><label>Phone shown to clients</label><input id="s-phone" value="${h(a.owner_phone || a.whatsapp || "")}"><small>Clients call or WhatsApp this number with questions.</small></div>
+      <div class="field"><label>Email for alert copies</label><input id="s-email" value="${h(a.notify_email || "")}"></div>
+    </div><div class="card">
+      <div class="field"><label>Sending</label><div class="toggle"><input type="checkbox" id="s-auto" ${a.auto_send ? "checked" : ""}><div><b>Send to clients automatically</b><br><small class="mut">When the alert has full details (PNR, passenger names, client mobile) and Aviolink is confident, it goes to the client without waiting for you. Anything uncertain still waits in “To send”.</small></div></div></div>
+      <div class="field"><label>Team logins</label><input id="s-team" value="${h((a.login_emails || []).join(", "))}" placeholder="staff1@gmail.com, staff2@gmail.com"><small>Other Google emails allowed to open this dashboard. ${h(a.gmail?.email || "")} can always log in.</small></div>
+      <div class="field"><label>Plan</label><div>${a.plan === "trial" ? `Free trial${a.trial_ends_at ? " — ends " + new Date(a.trial_ends_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : ""}` : h(a.plan || "-")}</div></div>
+    </div></div>
+    <button class="btn pri" id="s-save">Save settings</button>`;
+  $("#s-save").onclick = async () => {
+    const btn = $("#s-save"); btn.disabled = true;
+    try {
+      const r = await post("/api/settings", { name: $("#s-name").value, owner_phone: $("#s-phone").value, notify_email: $("#s-email").value, auto_send: $("#s-auto").checked,
+        login_emails: $("#s-team").value.split(/[,\s]+/).filter(Boolean) });
+      ME.agency = r.agency; toast("✓ Saved"); shell();
+    } catch (e) { toast(e.message); btn.disabled = false; }
+  };
+}
+
+// ---------- admin: agencies ----------
+async function vAgencies(m) {
+  const list = await api("/api/admin/agencies");
+  m.innerHTML = `<h1>Agencies</h1><p class="sub">${list.length} agencies · alert counts are last 30 days, mail counts last 7 days.</p>
+    <div class="tablewrap"><table><tr><th>Agency</th><th>Plan</th><th>Gmail</th><th>Alerts</th><th>Mail</th><th></th></tr>
+    ${list.map((a) => {
+      const g = a.gmail || {}, ok = g.last_ok && Date.now() - g.last_ok < 15 * 60000;
+      const trialEnd = a.trial_ends_at ? new Date(a.trial_ends_at) : null, expired = a.plan === "trial" && trialEnd && trialEnd < new Date();
+      return `<tr><td><b>${h(a.name)}</b><br><span class="mut">${h(a.slug)}</span> ${a.status === "suspended" ? `<span class="pill p-bad">Suspended</span>` : ""}${a.auto_send ? ` <span class="pill p-info">Auto-send</span>` : ""}</td>
+        <td>${h(a.plan || "-")}${a.plan === "trial" && trialEnd ? `<br><span class="${expired ? "" : "mut"}" style="${expired ? "color:var(--bad)" : ""}">${expired ? "expired " : "ends "}${trialEnd.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</span>` : ""}</td>
+        <td>${g.email ? `${h(g.email)}<br><span class="pill ${ok ? "p-ok" : "p-warn"}">${g.last_ok ? "read " + when(g.last_ok) : "not read since restart"}</span>` : `<span class="mut">not connected</span>`}</td>
+        <td>${a.stats.alerts30} total<br>${a.stats.toSend ? `<span style="color:var(--bad)">${a.stats.toSend} to send</span>` : `<span class="mut">0 to send</span>`} · ${a.stats.sent30} sent</td>
+        <td>${a.stats.mails7} read<br>${a.stats.review7 ? `<span style="color:var(--bad)">${a.stats.review7} unrecognised</span>` : `<span class="mut">0 unrecognised</span>`}</td>
+        <td style="white-space:nowrap"><button class="btn pri" data-as="${a.id}">Login as</button><br>
+          <select data-act="${a.id}" style="margin-top:6px"><option value="">More…</option>
+            ${a.status === "suspended" ? `<option value="activate">Activate</option>` : `<option value="suspend">Suspend</option>`}
+            <option value="trial30">Extend trial +30 days</option>${a.plan !== "paid" ? `<option value="paid">Mark as paid</option>` : `<option value="trialplan">Move back to trial</option>`}</select></td></tr>`;
+    }).join("")}</table></div>`;
+  m.querySelectorAll("[data-as]").forEach((b) => b.onclick = async () => { await post("/api/admin/actas", { agencyId: b.dataset.as }); VIEW = "alerts"; await boot(); });
+  m.querySelectorAll("[data-act]").forEach((s) => s.onchange = async () => {
+    const v = s.value; if (!v) return;
+    const body = { activate: { status: "active" }, suspend: { status: "suspended" }, trial30: { extendTrialDays: 30 }, paid: { plan: "paid" }, trialplan: { plan: "trial" } }[v];
+    if (v === "suspend" && !confirm("Suspend this agency? Their mailbox will stop being read and they cannot log in.")) { s.value = ""; return; }
+    try { await post(`/api/admin/agencies/${s.dataset.act}`, body); toast("✓ Updated"); vAgencies(m); } catch (e) { toast(e.message); s.value = ""; }
+  });
+}
+
+async function boot() {
+  try { ME = await api("/api/me"); }
+  catch (e) { if (e.message === "suspended") { history.replaceState(null, "", "?e=suspended"); renderLogin(); } else if (e.message !== "login") renderLogin(); return; }
+  if (location.search) history.replaceState(null, "", location.pathname);
+  if (!ME.agency && !ME.admin) { renderLogin(); return; }
+  shell();
+}
+boot();
+setInterval(() => { const f = document.activeElement; if (ME && VIEW === "alerts" && !document.hidden && !(f && f.tagName === "INPUT") && !document.querySelector("pre.msg:not([hidden])")) render(); }, 60000);
+</script>
+</body>
+</html>

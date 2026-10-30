@@ -245,6 +245,15 @@ async function pollTelegram() {
     // /retest PNR  -> forget this PNR's recent mails + alerts so the next poll re-reads them (no re-forwarding needed)
     const txt = (u.message?.text || "").trim();
     if (txt.startsWith("/report")) { await nightlyReport(true); continue; }
+    if (txt.startsWith("/wasub")) {
+      const waba = process.env.WA_WABA_ID || "2690954148013574";
+      const H = { authorization: `Bearer ${WA.token}`, "content-type": "application/json" };
+      const sub = await fetch(`https://graph.facebook.com/v20.0/${waba}/subscribed_apps`, { method: "POST", headers: H }).then((r) => r.json()).catch((e) => ({ error: { message: e.message } }));
+      const list = await fetch(`https://graph.facebook.com/v20.0/${waba}/subscribed_apps`, { headers: H }).then((r) => r.json()).catch(() => ({}));
+      const ph = await fetch(`https://graph.facebook.com/v20.0/${WA.phoneId}?fields=display_phone_number,verified_name,name_status,code_verification_status,quality_rating,platform_type,status,messaging_limit_tier`, { headers: H }).then((r) => r.json()).catch(() => ({}));
+      await tg("sendMessage", { chat_id: u.message.chat.id, text: `🔗 Subscribe app to WABA ${waba}: ${sub.success ? "OK" : JSON.stringify(sub.error || sub).slice(0, 300)}\nApps subscribed: ${(list.data || []).map((x) => x.whatsapp_business_api_data?.name || x.name || "app").join(", ") || "none"}\n\n📱 Number: ${JSON.stringify(ph).slice(0, 600)}` });
+      continue;
+    }
     if (txt.startsWith("/watest")) {
       const to = (txt.split(/\s+/)[1] || "");
       const ag = AGENCIES.find((a) => a.slug === CFG.agencySlug) || AGENCIES[0];
@@ -252,7 +261,8 @@ async function pollTelegram() {
         segments: [{ sector: "DEL-JDH", old: { flight: "6E 6629", date: "2026-10-30", dep: "11:05", arr: "12:25" }, new: { flight: "6E 6629", date: "2026-10-30", dep: "10:50", arr: "12:05" } }] };
       const t = templateFor(sample, ag);
       const r = await sendWhatsAppTemplate(to, t.name, t.params);
-      await tg("sendMessage", { chat_id: u.message.chat.id, text: r.ok ? `✅ Template "${t.name}" sent to ${to} from phone id ${WA.phoneId}` : `❌ ${r.err}` });
+      if (r.ok && r.id) WATCH_WA.set(r.id, `test to +${normMobile(to)}`);
+      await tg("sendMessage", { chat_id: u.message.chat.id, text: r.ok ? `✅ Accepted by Meta: "${t.name}" to ${to} (msg ${r.id}). Delivery status will follow here.` : `❌ ${r.err}` });
       continue;
     }
     if (txt.startsWith("/backfill")) {
@@ -934,11 +944,13 @@ async function strikeAwareBody(raw) {
 }
 
 
+const WATCH_WA = new Map(); // message id -> label, statuses reported to Telegram
 async function handleWaWebhook(payload) {
   for (const entry of payload.entry || []) for (const ch of entry.changes || []) {
     const v = ch.value || {};
     for (const s of v.statuses || []) {
       console.log(`[wa-status] ${s.recipient_id} ${s.status} ${s.id}`);
+      if (WATCH_WA.has(s.id) && s.status !== "failed") await adminCard(`📶 WhatsApp ${esc(WATCH_WA.get(s.id))} → <b>${esc(s.status)}</b>`);
       if (s.status === "failed") {
         const e = (s.errors || [])[0] || {};
         await adminCard(`❌ <b>WHATSAPP NOT DELIVERED</b> to +${esc(s.recipient_id)}\nCode ${esc(e.code)} — ${esc(e.title || "")}\n${esc(e.error_data?.details || e.message || "")}`);

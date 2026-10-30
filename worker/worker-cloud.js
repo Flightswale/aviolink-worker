@@ -132,7 +132,7 @@ function templateFor(p, agency) {
   const cancelled = p.changeType === "CANCELLATION";
   const oldTxt = segs.filter((s) => s.old).map((s) => legText(s.sector, s.old)).join(" | ");
   const newTxt = segs.filter((s) => s.new).map((s) => legText(s.sector, s.new)).join(" | ");
-  const params = [who, p.pnr, airlineName(p.airline || ""), cancelled ? oldTxt : (oldTxt || "As per your ticket"), cancelled ? (newTxt || "None offered") : newTxt,
+  const params = [who, p.pnr, airlineName(p.airline || ""), cancelled ? oldTxt : (oldTxt || "As per your ticket"), cancelled ? (newTxt || "Not offered by the airline - full refund applicable") : newTxt,
     agency?.name, agency?.owner_phone || agency?.whatsapp];
   return { name: cancelled ? (process.env.WA_TPL_CANCEL || "flight_cancellation") : (process.env.WA_TPL_CHANGE || "flight_schedule_change"),
            params: params.map((x) => clean(x)) };

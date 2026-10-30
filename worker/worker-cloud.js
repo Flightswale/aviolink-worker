@@ -18,7 +18,7 @@ const fs = require("fs");
 const { ImapFlow } = require("imapflow");
 const nodemailer = require("nodemailer");
 const { createClient } = require("@supabase/supabase-js");
-const { parseEmail, splitEmail, helpers, decodeMimeWords } = require("../parser");
+const { parseEmail, splitEmail, helpers, decodeMimeWords, stripHtml } = require("../parser");
 const { compile } = require("../compiler");
 const http = require("http");
 const gmail = require("../gmail");
@@ -543,6 +543,8 @@ https://aviolink.in`,
 async function processRaw(raw, mid, subject, forcedAgency = null, opts = {}) {
     const rawHead = raw.slice(0, raw.indexOf("\n\n") === -1 ? raw.length : raw.indexOf("\n\n"));
     const email = splitEmail(raw);
+    const marked = await strikeAwareBody(raw);
+    if (marked) { email.body = marked; console.log("[body] crossed-out values marked as [OLD: …]"); }
     // Passenger hint: airlines often address "PAX NAME <agency@mail>" in To:
     email.toDisplayName = null; // To: display name is the agency contact (IndiGo), never the passenger
     const pdfText = await extractPdfTexts(raw);
@@ -852,6 +854,21 @@ async function fetchByKey(a, key, chatId) {
   }
   const { data: logs } = await sb.from("mail_log").select("subject,verdict,detail").in("message_id", ids.map((id) => `gm-${id}`));
   await tg("sendMessage", { chat_id: chatId, text: `✅ /fetch ${key} done:\n` + (logs || []).map((r) => `• ${String(r.subject).slice(0, 60)} → ${r.verdict}${r.detail ? " (" + String(r.detail).slice(0, 50) + ")" : ""}`).join("\n") });
+}
+
+
+// Airlines often show a change only by crossing out the old time (<s>, <del>, line-through).
+// Plain-text conversion loses that, so mark struck text as [OLD: …] for the AI. Returns null if nothing is struck.
+async function strikeAwareBody(raw) {
+  if (!simpleParser) return null;
+  try {
+    const m = await simpleParser(raw, { skipImageLinks: true });
+    const html = typeof m.html === "string" ? m.html : "";
+    if (!/<(s|strike|del)\b|line-through/i.test(html)) return null;
+    let h = html.replace(/<(s|strike|del)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_, t, inner) => ` [OLD: ${inner.replace(/<[^>]+>/g, " ").trim()}] `);
+    h = h.replace(/<(span|div|td|p|font|b|strong)\b([^>]*line-through[^>]*)>([\s\S]*?)<\/\1>/gi, (_, t, attrs, inner) => ` [OLD: ${inner.replace(/<[^>]+>/g, " ").trim()}] `);
+    return stripHtml(h).replace(/\n{3,}/g, "\n\n");
+  } catch (e) { console.error("[body]", e.message); return null; }
 }
 
 // ---------- AI safety net: second opinion before any mail is skipped ----------

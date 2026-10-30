@@ -162,6 +162,7 @@ Respond ONLY with a JSON object, no markdown fences, matching exactly:
 "actionDeadline":"YYYY-MM-DD"|null,"paxCount":number|null}
 
 CRITICAL AIRLINE-DOMAIN RULES:
+0. Text written as [OLD: …] was CROSSED OUT in the email (strikethrough). It is the PREVIOUS value; the value next to it is the NEW value. A mail that shows crossed-out times is a SCHEDULE_CHANGE even if its subject looks like a check-in or "travel information" mail.
 1. pnr = the AIRLINE PNR / record locator: 5-7 alphanumeric chars (e.g. 8AYCHU, KEBDPW). NEVER a vendor/agency reference like CT1457860, FBB7SVA7, booking ids, or ticket numbers. If both appear, always pick the 5-7 char airline PNR.
 2. GDS segment status codes: UN, UC, HX, NO, WK = CANCELLED (that flight goes in "old", "new"=null unless a replacement flight is explicitly offered). TK, TL, SC = the NEW/changed schedule. HK, KK = confirmed.
 3. A mail saying "rescheduled/canceled" that shows only ONE flight with UN/HX status is a CANCELLATION: changeType=CANCELLATION, that flight in "old", "new"=null. NEVER put a cancelled flight in "new".
@@ -270,4 +271,4 @@ async function parseEmail(rawEml, opts = {}) {
 }
 
 const helpers = { parseDate, parseTime, normSector, normFlight, extractPaxNames };
-module.exports = { parseEmail, splitEmail, helpers, scoreResult, aiFallback, decodeMimeWords };
+module.exports = { parseEmail, splitEmail, helpers, scoreResult, aiFallback, decodeMimeWords, stripHtml };

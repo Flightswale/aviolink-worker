@@ -106,4 +106,4 @@ function compile(parsed, agency = {}) {
   return { whatsapp, emailSubject, emailBody };
 }
 
-module.exports = { compile };
+module.exports = { compile, airlineName };

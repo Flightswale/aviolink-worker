@@ -19,7 +19,7 @@ const { ImapFlow } = require("imapflow");
 const nodemailer = require("nodemailer");
 const { createClient } = require("@supabase/supabase-js");
 const { parseEmail, splitEmail, helpers, decodeMimeWords, stripHtml } = require("../parser");
-const { compile } = require("../compiler");
+const { compile, airlineName } = require("../compiler");
 const http = require("http");
 const gmail = require("../gmail");
 let pdfParse = null;
@@ -114,6 +114,57 @@ async function sendWhatsApp(toMobile, text) {
   } catch (e) { return { ok: false, err: e.message }; }
 }
 
+
+// ---------- WhatsApp templates (client messages without the 24-hour rule) ----------
+// Env: WA_USE_TEMPLATES=1, WA_TPL_CHANGE (default flight_schedule_change), WA_TPL_CANCEL (default flight_cancellation), WA_TPL_LANG (default en)
+const MON3 = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function legText(sector, l) {
+  if (!l) return "";
+  const d = l.date && /^\d{4}-\d{2}-\d{2}$/.test(l.date) ? `${Number(l.date.slice(8))} ${MON3[Number(l.date.slice(5, 7)) - 1]}` : (l.date || "");
+  return [l.flight, String(sector || "").replace(/\s*(→|->)\s*/, "-"), d, `${l.dep || "--:--"}-${l.arr || "--:--"}${l.arrDayOffset ? " (+" + l.arrDayOffset + ")" : ""}`].filter(Boolean).join(" ");
+}
+const clean = (s, max = 300) => (String(s || "").replace(/[\r\n\t]+/g, " ").replace(/ {4,}/g, "   ").trim().slice(0, max)) || "-";
+function titleName(n) { return String(n || "").toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()).replace(/\s+/g, " ").trim(); }
+function templateFor(p, agency) {
+  const segs = p.segments || [];
+  const pax = (p.passengers || []).map(titleName);
+  const who = pax.length ? pax[0] + (pax.length > 1 ? ` +${pax.length - 1}` : "") : "Customer";
+  const cancelled = p.changeType === "CANCELLATION";
+  const oldTxt = segs.filter((s) => s.old).map((s) => legText(s.sector, s.old)).join(" | ");
+  const newTxt = segs.filter((s) => s.new).map((s) => legText(s.sector, s.new)).join(" | ");
+  const params = [who, p.pnr, airlineName(p.airline || ""), cancelled ? oldTxt : (oldTxt || "As per your ticket"), cancelled ? (newTxt || "None offered") : newTxt,
+    agency?.name, agency?.owner_phone || agency?.whatsapp];
+  return { name: cancelled ? (process.env.WA_TPL_CANCEL || "flight_cancellation") : (process.env.WA_TPL_CHANGE || "flight_schedule_change"),
+           params: params.map((x) => clean(x)) };
+}
+async function sendWhatsAppTemplate(toMobile, name, params) {
+  const to = normMobile(toMobile);
+  if (!to) return { ok: false, err: "invalid mobile" };
+  try {
+    const res = await fetch(`https://graph.facebook.com/v20.0/${WA.phoneId}/messages`, {
+      method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${WA.token}` },
+      body: JSON.stringify({ messaging_product: "whatsapp", to, type: "template", template: {
+        name, language: { code: process.env.WA_TPL_LANG || "en" },
+        components: [{ type: "body", parameters: params.map((t) => ({ type: "text", text: t })) }] } }) });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, err: `${data?.error?.code}: ${data?.error?.message || "unknown"}${data?.error?.error_data?.details ? " — " + data.error.error_data.details : ""}` };
+    return { ok: true, id: data.messages?.[0]?.id };
+  } catch (e) { return { ok: false, err: e.message }; }
+}
+// One entry point: template when enabled (works any time), plain text as fallback (works inside a 24 h window).
+async function deliverClientWhatsApp(target, payload, agency, text) {
+  if (process.env.WA_USE_TEMPLATES === "1" && payload && payload.pnr) {
+    const t = templateFor(payload, agency);
+    const r = await sendWhatsAppTemplate(target, t.name, t.params);
+    if (r.ok) return { ...r, via: `template ${t.name}` };
+    console.error("[wa-template]", r.err);
+    const r2 = await sendWhatsApp(target, text);
+    return r2.ok ? { ...r2, via: "text (template failed: " + r.err + ")" } : { ok: false, err: `template: ${r.err} | text: ${r2.err}` };
+  }
+  const r = await sendWhatsApp(target, text);
+  return { ...r, via: "text" };
+}
+
 // ---------- agency directory (refreshed every 5 min) ----------
 let AGENCIES = [];
 let DEFAULT_AGENCY = null;
@@ -194,6 +245,16 @@ async function pollTelegram() {
     // /retest PNR  -> forget this PNR's recent mails + alerts so the next poll re-reads them (no re-forwarding needed)
     const txt = (u.message?.text || "").trim();
     if (txt.startsWith("/report")) { await nightlyReport(true); continue; }
+    if (txt.startsWith("/watest")) {
+      const to = (txt.split(/\s+/)[1] || "");
+      const ag = AGENCIES.find((a) => a.slug === CFG.agencySlug) || AGENCIES[0];
+      const sample = { pnr: "VETN8N", airline: "6E", changeType: "SCHEDULE_CHANGE", passengers: ["MR DHYEY TAILOR", "MS ANJANA TAILOR"],
+        segments: [{ sector: "DEL-JDH", old: { flight: "6E 6629", date: "2026-10-30", dep: "11:05", arr: "12:25" }, new: { flight: "6E 6629", date: "2026-10-30", dep: "10:50", arr: "12:05" } }] };
+      const t = templateFor(sample, ag);
+      const r = await sendWhatsAppTemplate(to, t.name, t.params);
+      await tg("sendMessage", { chat_id: u.message.chat.id, text: r.ok ? `✅ Template "${t.name}" sent to ${to} from phone id ${WA.phoneId}` : `❌ ${r.err}` });
+      continue;
+    }
     if (txt.startsWith("/backfill")) {
       const n = AGENCIES.filter((a) => a.gmail_refresh_token);
       for (const a of n) { await sb.from("agencies").update({ gmail_backfill_status: "pending" }).eq("id", a.id); a.gmail_backfill_status = "pending"; }
@@ -239,7 +300,7 @@ async function pollTelegram() {
       if (action === "ap" && WA.enabled()) {
         // Deliver to client WhatsApp (booking mobile) or agency owner as fallback.
         try {
-          const { data: al } = await sb.from("alerts").select("agency_id,pnr,compiled_whatsapp").eq("id", alertId).single();
+          const { data: al } = await sb.from("alerts").select("agency_id,pnr,compiled_whatsapp,payload").eq("id", alertId).single();
           if (al) {
             let target = null, who = "";
             if (al.pnr) {
@@ -251,10 +312,11 @@ async function pollTelegram() {
               if (ag?.whatsapp || ag?.owner_phone) { target = ag.whatsapp || ag.owner_phone; who = "agency owner"; }
             }
             if (target) {
-              const r = await sendWhatsApp(target, al.compiled_whatsapp);
+              const ag = AGENCIES.find((a) => a.id === al.agency_id);
+              const r = await deliverClientWhatsApp(target, al.payload, ag, al.compiled_whatsapp);
               if (r.ok) {
                 await sb.from("alerts").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", alertId);
-                await tg("sendMessage", { chat_id: u.callback_query.message.chat.id, text: `📲 WhatsApp delivered to ${who} (${target})` });
+                await tg("sendMessage", { chat_id: u.callback_query.message.chat.id, text: `📲 WhatsApp delivered to ${who} (${target}) via ${r.via}` });
               } else {
                 await tg("sendMessage", { chat_id: u.callback_query.message.chat.id, text: `⚠️ WhatsApp failed (${r.err}).\nTest-mode tip: the recipient must be a verified test number AND must message the test number once ("hi") to open the 24h window.` });
               }

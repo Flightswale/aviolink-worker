@@ -8,7 +8,7 @@ const crypto = require("crypto");
 const PAGE = require("fs").readFileSync(require("path").join(__dirname, "dashboard.html"), "utf8");
 
 const SECRET = process.env.SESSION_SECRET || process.env.GOOGLE_CLIENT_SECRET || "aviolink-dev";
-const ADMINS = (process.env.ADMIN_EMAILS || "info@flightswale.com").toLowerCase().split(/[,\s]+/).filter(Boolean);
+const ADMINS = (process.env.ADMIN_EMAILS || "info@finch-travels.com,support@aviolink.in").toLowerCase().split(/[,\s]+/).filter(Boolean);
 const COOKIE = "av_s";
 const DAY = 86400000;
 

@@ -351,7 +351,8 @@ async function pollTelegram() {
       if (action === "ap" && WA.enabled()) {
         try {
           const r = await sendAlertToClient(alertId, { actor: "telegram", fallbackOwner: true });
-          await tg("sendMessage", { chat_id: u.callback_query.message.chat.id, text: r.ok ? `📲 WhatsApp sent to ${r.who} (${r.target}) via ${r.via} — delivery status follows` : `⚠️ Not sent: ${r.err}` });
+          if (r.ok && r.id) WATCH_WA.set(r.id, `${r.who} +${normMobile(r.target)}`);
+          await tg("sendMessage", { chat_id: u.callback_query.message.chat.id, text: r.ok ? (r.who === "agency owner" ? `ℹ️ No client mobile on file for this PNR — sent to the agency's own WhatsApp (${r.target}).\n` : "") + `📲 Sent to ${r.who} (${r.target}) via ${r.via} — delivery status follows` : `⚠️ Not sent: ${r.err}` });
         } catch (e) { console.error("[wa-error]", e.message); }
       }
     }

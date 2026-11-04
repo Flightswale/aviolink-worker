@@ -130,8 +130,16 @@ function templateFor(p, agency) {
   const pax = (p.passengers || []).map(titleName);
   const who = pax.length ? pax[0] + (pax.length > 1 ? ` +${pax.length - 1}` : "") : "Customer";
   const cancelled = p.changeType === "CANCELLATION";
-  const oldTxt = segs.filter((s) => s.old).map((s) => legText(s.sector, s.old)).join(" | ");
-  const newTxt = segs.filter((s) => s.new).map((s) => legText(s.sector, s.new)).join(" | ");
+  // Client sees only the legs that actually changed and are not yet flown.
+  const nf = (f) => String(f || "").toUpperCase().replace(/\s+/g, "");
+  const legChanged = (s) => !s.new || !s.old || s.status === "CANCELLED" || nf(s.old.flight) !== nf(s.new.flight) || s.old.date !== s.new.date || s.old.dep !== s.new.dep || s.old.arr !== s.new.arr;
+  const todayIST = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+  const notFlown = (s) => { const d = (s.new || s.old || {}).date; return !(d && /^\d{4}-\d{2}-\d{2}$/.test(d) && d < todayIST); };
+  let show = segs.filter((s) => s.status !== "UNCHANGED" && legChanged(s) && notFlown(s));
+  if (!show.length) show = segs.filter((s) => s.status !== "UNCHANGED" && legChanged(s));
+  if (!show.length) show = segs;
+  const oldTxt = show.filter((s) => s.old).map((s) => legText(s.sector, s.old)).join(" | ");
+  const newTxt = show.filter((s) => s.new).map((s) => legText(s.sector, s.new)).join(" | ");
   const params = [who, p.pnr, airlineName(p.airline || ""), cancelled ? oldTxt : (oldTxt || "As per your ticket"), cancelled ? (newTxt || "Not offered by the airline - full refund applicable") : newTxt,
     agency?.name, agency?.owner_phone || agency?.whatsapp];
   return { name: cancelled ? (process.env.WA_TPL_CANCEL || "flight_cancellation") : (process.env.WA_TPL_CHANGE || "flight_schedule_change"),

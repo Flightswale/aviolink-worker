@@ -204,9 +204,10 @@ async function aiFallback(email, opts = {}) {
     if (!res.ok) {
       const errBody = await res.text().catch(() => "");
       console.error(`[ai-error] HTTP ${res.status}: ${errBody.slice(0, 300)}`);
-      return null;
+      return { _aiError: `HTTP ${res.status}: ${errBody.slice(0, 200)}` }; // AI unavailable — caller holds the mail and retries
     }
-    const data = await res.json();
+    let data;
+    try { data = await res.json(); } catch (e) { return { _aiError: `bad response: ${e.message}` }; }
     const text = (data.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
     const clean = text.replace(/```json|```/g, "").trim();
     // Tolerate chatter around the JSON: parse from the first "{" to the last "}".
@@ -216,7 +217,8 @@ async function aiFallback(email, opts = {}) {
     return parsed;
   } catch (err) {
     console.error(`[ai-error] ${err.message}`);
-    return null;
+    if (/JSON|Unexpected token/i.test(err.message)) return null; // AI answered but not in JSON — this one mail goes to review
+    return { _aiError: err.message }; // network / timeout — hold and retry
   }
 }
 
@@ -249,6 +251,10 @@ async function parseEmail(rawEml, opts = {}) {
 
   if (opts.ai !== false) {
     const r = await aiFallback(email, opts);
+    if (r && r._aiError) {
+      return { pnr: null, airline: null, changeType: null, kind: null, passengers: [], segments: [], actionDeadline: null,
+        confidence: 0, source: "ai-error", aiError: r._aiError, raw: { subject: email.subject, from: email.from } };
+    }
     if (r && r._notBooking) {
       return { pnr: null, airline: null, changeType: null, kind: null, passengers: [], segments: [], actionDeadline: null,
         confidence: 0, source: "ai-not-booking", raw: { subject: email.subject, from: email.from } };

@@ -641,7 +641,47 @@ https://aviolink.in`,
 
 // ---------- mail polling ----------
 // One mail, from any source (IMAP forward inbox or an agency's own Gmail) -> same pipeline.
+// ---------- AI outage: never lose a mail ----------
+// If the AI reader errors (bad key, no credit, overload, network), the mail is NOT logged,
+// so the next poll reads it again. Telegram is told once, and again when AI is back.
+class AiDown extends Error {}
+const AI_DOWN = { since: 0, reason: "", held: new Set(), warnedAt: 0 };
+function aiFixHint(reason) {
+  if (/401|authentication|x-api-key/i.test(reason)) return "Anthropic API key is invalid. Create a new key at console.anthropic.com → API Keys, then Railway → aviolink-worker → Variables → ANTHROPIC_API_KEY → paste → it restarts by itself.";
+  if (/credit|billing|balance/i.test(reason)) return "Anthropic account has no credit. console.anthropic.com → Billing → add credit.";
+  if (/429|529|overloaded|rate/i.test(reason)) return "Anthropic is busy — no action needed, retrying automatically.";
+  return "Retrying automatically every minute.";
+}
+async function aiDown(reason, subject) {
+  if (!AI_DOWN.since) AI_DOWN.since = Date.now();
+  AI_DOWN.reason = reason; AI_DOWN.held.add(subject);
+  console.error(`[ai-down] held "${subject}" — ${reason}`);
+  if (Date.now() - AI_DOWN.warnedAt > 30 * 60000) {
+    AI_DOWN.warnedAt = Date.now();
+    await adminCard(`⛔ <b>AI READER NOT WORKING</b>\n${esc(reason.slice(0, 200))}\n\n📥 ${AI_DOWN.held.size} mail(s) held — <b>not lost</b>. They are read automatically the moment AI works again.\nLatest: ${esc(subject)}\n\n🔧 ${esc(aiFixHint(reason))}`).catch(() => {});
+  }
+}
+function aiOk() {
+  if (!AI_DOWN.since) return;
+  const n = AI_DOWN.held.size, mins = Math.round((Date.now() - AI_DOWN.since) / 60000);
+  AI_DOWN.since = 0; AI_DOWN.held.clear(); AI_DOWN.warnedAt = 0;
+  requeueUnparsed().catch(() => {});
+  adminCard(`✅ <b>AI READER WORKING AGAIN</b> after ${mins} min — ${n} held mail(s) are being read now.`).catch(() => {});
+}
+// Mails that ended as "unparsed" because AI failed earlier: put them back in the queue once.
+async function requeueUnparsed() {
+  const since = new Date(Date.now() - 3 * 86400000).toISOString();
+  const { data } = await sb.from("mail_log").select("id,subject").eq("verdict", "review").like("detail", "%src=unparsed%").gte("created_at", since);
+  if (!data || !data.length) return;
+  await sb.from("mail_log").delete().in("id", data.map((x) => x.id));
+  await adminCard(`🔁 Re-reading ${data.length} mail(s) that failed earlier because AI was down:\n${data.slice(0, 8).map((x) => "• " + esc(x.subject)).join("\n")}`).catch(() => {});
+}
+
 async function processRaw(raw, mid, subject, forcedAgency = null, opts = {}) {
+  try { return await processRawInner(raw, mid, subject, forcedAgency, opts); }
+  catch (e) { if (e instanceof AiDown) { await aiDown(e.message, subject); return false; } throw e; }
+}
+async function processRawInner(raw, mid, subject, forcedAgency = null, opts = {}) {
     const rawHead = raw.slice(0, raw.indexOf("\n\n") === -1 ? raw.length : raw.indexOf("\n\n"));
     const email = splitEmail(raw);
     const marked = await strikeAwareBody(raw);
@@ -665,6 +705,7 @@ async function processRaw(raw, mid, subject, forcedAgency = null, opts = {}) {
     if (opts.bookingsOnly) {
       // candidates were already chosen by sender/subject/AI — no keyword gate here
       const parsed = await parseEmail(raw, { ai: Boolean(CFG.anthropicKey), apiKey: CFG.anthropicKey || undefined, email });
+      if (parsed.source === "ai-error") throw new AiDown(parsed.aiError);
       if (parsed.kind === "TICKET" && parsed.pnr) {
         await upsertBooking(agency.id, parsed, extractClientMobile(email.body) ? { mobile: extractClientMobile(email.body) } : {});
         await logMail(agency.id, mid, subject, "backfill-ticket", parsed.pnr);
@@ -696,6 +737,8 @@ async function processRaw(raw, mid, subject, forcedAgency = null, opts = {}) {
       await adminCard(`🧾 <b>QUEUE SWEEP</b> · 🏢 ${esc(agency.name)}\nScanned ${total} · changes ${all.length}`);
     } else {
       const parsed = await parseEmail(raw, { ai: Boolean(CFG.anthropicKey), apiKey: CFG.anthropicKey || undefined, email });
+      if (parsed.source === "ai-error") throw new AiDown(parsed.aiError);
+      if (CFG.anthropicKey) aiOk();
       parsed._bodyMobile = extractClientMobile(email.body);
       let linked = null;
       if (parsed.source === "ai-not-booking") linked = await findLinkedBooking(agency, email);
@@ -705,6 +748,7 @@ async function processRaw(raw, mid, subject, forcedAgency = null, opts = {}) {
           (linked.segments || []).map((s) => `  ${s.flight || ""} ${s.sector || ""} ${s.date || ""} ${s.dep || ""}-${s.arr || ""}`).join("\n") +
           `\n\nThe email below may contain a change to this booking hidden inside general travel information (new departure/arrival time, new flight number, new date, cancellation, terminal change with retime). Compare it carefully with the booking above. If anything changed, return a SCHEDULE_CHANGE with old (from the booking) and new values for every leg; use PNR ${linked.pnr}. If nothing in the booking changed, return {"kind":null}.\n\n=== EMAIL ===\n`;
         const p2 = await parseEmail(raw, { ai: Boolean(CFG.anthropicKey), apiKey: CFG.anthropicKey || undefined, email: { ...email, body: ctx + email.body }, _templates: [] });
+        if (p2.source === "ai-error") throw new AiDown(p2.aiError);
         p2._bodyMobile = parsed._bodyMobile;
         if (p2.kind === "SCHEDULE_CHANGE" && (p2.segments || []).length) {
           p2.pnr = p2.pnr || linked.pnr;
@@ -1011,12 +1055,13 @@ async function aiSaysTravel(email) {
       model: process.env.ANTHROPIC_CLASSIFY_MODEL || "claude-haiku-4-5-20251001", max_tokens: 5,
       system: "You classify emails received by a travel agency. Answer YES if the email is from an airline, GDS, travel consolidator, OTA or booking vendor AND is about a specific flight booking: an e-ticket / booking confirmation / itinerary, or a schedule change, time change, delay, cancellation, rebooking or re-accommodation of a flight. Answer NO for marketing, newsletters, OTPs, check-in reminders, boarding passes, invoices, payment receipts, refunds the agency requested, and anything not about a specific flight. Any language. Answer exactly YES or NO.",
       messages: [{ role: "user", content: `FROM: ${email.from}\nSUBJECT: ${email.subject}\n\n${(email.body || "").slice(0, 3000)}` }] }) });
-    if (!res.ok) { console.error("[ai-safety] HTTP", res.status); return false; }
+    if (!res.ok) { const b = await res.text().catch(() => ""); throw new AiDown(`HTTP ${res.status}: ${b.slice(0, 200)}`); }
     const d = await res.json();
+    aiOk();
     const yes = /^\s*yes/i.test(d.content?.[0]?.text || "");
     if (yes) console.log(`[ai-safety] rescued: ${email.subject}`);
     return yes;
-  } catch (e) { console.error("[ai-safety]", e.message); return false; }
+  } catch (e) { if (e instanceof AiDown) throw e; throw new AiDown(e.message); }
 }
 
 // ---------- watchdog + nightly report ----------
@@ -1133,6 +1178,7 @@ Reason: ${esc(why)}`);
 // ---------- main ----------
 (async () => {
   await loadAgencies();
+  requeueUnparsed().catch((e) => console.error("[requeue]", e.message));
   try {
     const { data: stuck } = await sb.from("agencies").update({ gmail_backfill_status: "pending" }).eq("gmail_backfill_status", "running").select("id");
     if (stuck && stuck.length) { console.log(`[backfill] ${stuck.length} interrupted backfill(s) will resume`); await loadAgencies(); }

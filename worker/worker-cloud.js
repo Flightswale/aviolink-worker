@@ -435,7 +435,27 @@ function enrichOldTiming(p, bookingSegments) {
 }
 
 // ---------- per-mail handling ----------
+// Airport codes in a change mail are checked against the ticket on file: same flight number => the ticket's sector wins
+// (stops misreads like PNQ→"PQQ" reaching the client).
+async function fixSectorsFromBooking(agencyId, parsed) {
+  if (parsed.kind !== "SCHEDULE_CHANGE" || !parsed.pnr || !(parsed.segments || []).length) return;
+  const { data: bk } = await sb.from("bookings").select("segments").eq("agency_id", agencyId).eq("pnr", parsed.pnr).maybeSingle();
+  if (!bk || !(bk.segments || []).length) return;
+  const nf = (f) => String(f || "").toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/^([A-Z0-9]{2})0+/, "$1");
+  const ns = (s) => String(s || "").toUpperCase().match(/[A-Z]{3}/g) || [];
+  for (const s of parsed.segments) {
+    const fl = nf(s.flight || s.old?.flight || s.new?.flight);
+    if (!fl) continue;
+    const b = bk.segments.find((x) => nf(x.flight || x.old?.flight || x.new?.flight) === fl);
+    const bs = b ? ns(b.sector) : [];
+    if (bs.length !== 2) continue;
+    const cur = ns(s.sector);
+    if (cur[0] !== bs[0] || cur[1] !== bs[1]) { console.log(`[sector-fix] ${parsed.pnr} ${fl}: ${s.sector} -> ${bs.join("-")}`); s.sector = `${bs[0]}-${bs[1]}`; }
+  }
+}
+
 async function handleParsed(agency, parsed, subject, messageId) {
+  await fixSectorsFromBooking(agency.id, parsed).catch(() => {});
   const conf = Math.round((parsed.confidence || 0) * 100);
   const tag = `🏢 ${esc(agency.name)}`;
 

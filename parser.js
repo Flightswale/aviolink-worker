@@ -252,6 +252,13 @@ async function parseEmail(rawEml, opts = {}) {
 
   if (opts.ai !== false) {
     const r = await aiFallback(email, opts);
+    // A ticket must name at least one real flight (carrier + number). Payment-initiated / pending mails
+    // without one are not bookings — saving them would later look like a "change" when the real ticket arrives.
+    if (r && !r._aiError && !r._notBooking && r.kind === "TICKET") {
+      const realFlight = (s) => /^[A-Z0-9]{2}\s?-?\d{1,4}[A-Z]?$/i.test(String((s && (s.flight || s.new?.flight || s.old?.flight)) || "").trim());
+      if (!(r.segments || []).some(realFlight)) return { pnr: null, airline: null, changeType: null, kind: null, passengers: [], segments: [], actionDeadline: null,
+        confidence: 0, source: "ai-not-booking", raw: { subject: email.subject, from: email.from } };
+    }
     if (r && r._aiError) {
       return { pnr: null, airline: null, changeType: null, kind: null, passengers: [], segments: [], actionDeadline: null,
         confidence: 0, source: "ai-error", aiError: r._aiError, raw: { subject: email.subject, from: email.from } };

@@ -137,6 +137,12 @@ function renderSignup() {
     <div class="field"><label for="su-name">Agency name</label><input id="su-name" placeholder="e.g. Sai Tours &amp; Travels" autocomplete="organization"><small>Your clients see this name in every alert.</small></div>
     <div class="field"><label for="su-contact">Your name</label><input id="su-contact" placeholder="e.g. Amit Patil" autocomplete="name"></div>
     <div class="field"><label for="su-phone">Phone shown to clients</label><input id="su-phone" placeholder="e.g. +91 98765 43210" autocomplete="tel" inputmode="tel"><small>"For any queries, please contact <i>your agency</i> at this number."</small></div>
+    <details style="margin:4px 0 12px" id="su-gst-box"><summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--navy)">GST details for your invoices (optional)</summary>
+      <div style="margin-top:10px">
+      <div class="field"><label for="su-gstin">GSTIN</label><input id="su-gstin" placeholder="e.g. 27AAKFF5906A1ZO" maxlength="15" style="text-transform:uppercase"><small>Your monthly invoice will carry this GSTIN so you can claim input tax credit.</small></div>
+      <div class="field"><label for="su-legal">Legal name (as on GST certificate)</label><input id="su-legal"></div>
+      <div class="field"><label for="su-addr">Billing address (as on GST certificate)</label><input id="su-addr"></div>
+      </div></details>
     <label class="toggle" style="margin:6px 0 16px;font-size:13px"><input type="checkbox" id="su-agree"><span>I agree to the <a href="https://aviolink.in/terms.html" target="_blank" rel="noopener">Terms of Service</a> and <a href="https://aviolink.in/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>.</span></label>
     <button class="btn pri" id="su-go" style="width:100%;padding:12px">Create account &amp; connect Gmail</button>
     <div class="err" id="su-err" hidden></div>
@@ -145,7 +151,8 @@ function renderSignup() {
   $("#su-go").onclick = async () => {
     const btn = $("#su-go"), err = $("#su-err"); err.hidden = true; btn.disabled = true; btn.textContent = "Creating…";
     try {
-      await post("/api/signup", { name: $("#su-name").value, contact: $("#su-contact").value, phone: $("#su-phone").value, agree: $("#su-agree").checked });
+      await post("/api/signup", { name: $("#su-name").value, contact: $("#su-contact").value, phone: $("#su-phone").value, agree: $("#su-agree").checked,
+        gstin: $("#su-gstin").value, legal_name: $("#su-legal").value, billing_address: $("#su-addr").value });
       btn.textContent = "Opening Google…"; location.href = "/api/gmail/connect";
     } catch (e) { err.textContent = e.message; err.hidden = false; btn.disabled = false; btn.textContent = "Create account & connect Gmail"; }
   };
@@ -320,6 +327,9 @@ function vSettings(m) {
     <div class="grid2"><div class="card">
       <div class="field"><label>Agency name</label><input id="s-name" value="${h(a.name)}"><small>Shown in the client message: “For any queries, please contact <b>${h(a.name)}</b> …”</small></div>
       <div class="field"><label>Phone shown to clients</label><input id="s-phone" value="${h(a.owner_phone || a.whatsapp || "")}"><small>Clients call or WhatsApp this number with questions.</small></div>
+      <div class="field"><label>GSTIN (for your invoices)</label><input id="s-gstin" value="${h(a.gstin || "")}" maxlength="15" placeholder="optional" style="text-transform:uppercase"></div>
+      <div class="field"><label>Legal name (as on GST certificate)</label><input id="s-legal" value="${h(a.legal_name || "")}"></div>
+      <div class="field"><label>Billing address</label><input id="s-addr" value="${h(a.billing_address || "")}"></div>
       <div class="field"><label>Email for alert copies</label><input id="s-email" value="${h(a.notify_email || "")}"></div>
     </div><div class="card">
       <div class="field"><label>Sending</label><div class="toggle"><input type="checkbox" id="s-auto" ${a.auto_send ? "checked" : ""}><div><b>Send to clients automatically</b><br><small class="mut">When the alert has full details (PNR, passenger names, client mobile) and Aviolink is confident, it goes to the client without waiting for you. Anything uncertain still waits in “To send”.</small></div></div></div>
@@ -331,7 +341,7 @@ function vSettings(m) {
   $("#s-save").onclick = async () => {
     const btn = $("#s-save"); btn.disabled = true;
     try {
-      const r = await post("/api/settings", { name: $("#s-name").value, owner_phone: $("#s-phone").value, notify_email: $("#s-email").value, auto_send: $("#s-auto").checked, wa_notify: $("#s-notify").checked,
+      const r = await post("/api/settings", { name: $("#s-name").value, owner_phone: $("#s-phone").value, notify_email: $("#s-email").value, auto_send: $("#s-auto").checked, wa_notify: $("#s-notify").checked, gstin: $("#s-gstin").value, legal_name: $("#s-legal").value, billing_address: $("#s-addr").value,
         login_emails: $("#s-team").value.split(/[,\s]+/).filter(Boolean) });
       ME.agency = r.agency; toast("✓ Saved"); shell();
     } catch (e) { toast(e.message); btn.disabled = false; }

@@ -34,7 +34,15 @@ module.exports = function makeBilling({ sb, adminCard, esc, loadAgencies }) {
   async function subscribe(agency, email) {
     if (!enabled()) throw new Error("Online payment is being set up — please WhatsApp +91 92705 46474 to subscribe.");
     const plan = await ensurePlan();
-    const sub = await rzp("POST", "/subscriptions", { plan_id: plan, total_count: 120, quantity: 1, customer_notify: 1,
+    // Customer record carries name, email, phone and GSTIN → Razorpay invoices are proper B2B GST invoices
+    let customerId = null;
+    try {
+      const c = await rzp("POST", "/customers", { name: (agency.legal_name || agency.name).slice(0, 50), email: email || agency.notify_email || undefined,
+        contact: String(agency.whatsapp || agency.owner_phone || "").replace(/[^\d+]/g, "") || undefined, gstin: agency.gstin || undefined, fail_existing: "0",
+        notes: { agency_id: agency.id, billing_address: (agency.billing_address || "").slice(0, 250) } });
+      customerId = c.id;
+    } catch (e) { console.error("[billing] customer", e.message); }
+    const sub = await rzp("POST", "/subscriptions", { plan_id: plan, total_count: 120, quantity: 1, customer_notify: 1, ...(customerId ? { customer_id: customerId } : {}),
       notes: { agency_id: agency.id, agency: agency.name, email: email || "" } });
     await sb.from("agencies").update({ rzp_subscription_id: sub.id }).eq("id", agency.id).then(() => {}, () => {});
     return sub.short_url;

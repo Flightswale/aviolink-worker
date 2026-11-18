@@ -32,6 +32,15 @@ const json = (res, code, data) => { res.writeHead(code, { "content-type": "appli
 async function body(req) { let b = ""; for await (const c of req) { b += c; if (b.length > 1e6) break; } try { return JSON.parse(b || "{}"); } catch (_) { return {}; } }
 const lc = (s) => String(s || "").trim().toLowerCase();
 
+// GSTIN: 15 chars, state code + PAN + entity + Z + checksum
+function validGstin(g) {
+  g = String(g || "").toUpperCase().trim();
+  if (!/^[0-3][0-9][A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(g)) return false;
+  const cs = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"; let sum = 0;
+  for (let i = 0; i < 14; i++) { const v = cs.indexOf(g[i]) * (i % 2 ? 2 : 1); sum += Math.floor(v / 36) + (v % 36); }
+  return cs[(36 - (sum % 36)) % 36] === g[14];
+}
+
 module.exports = function makeDashboard(ctx) {
   const { sb, gmail, getAgencies, loadAgencies, GMAIL_HEALTH, sendAlertToClient, adminCard, esc } = ctx;
 
@@ -54,6 +63,7 @@ module.exports = function makeDashboard(ctx) {
       id: a.id, name: a.name, slug: a.slug, plan: a.plan, trial_ends_at: a.trial_ends_at, status: a.status || "active",
       paid_until: a.paid_until || null, billingReady: Boolean(ctx.billing && ctx.billing.enabled()), price: ctx.billing ? ctx.billing.price : null,
       owner_phone: a.owner_phone, whatsapp: a.whatsapp, notify_email: a.notify_email, alerts_email: a.alerts_email,
+      gstin: a.gstin || "", legal_name: a.legal_name || "", billing_address: a.billing_address || "", contact_name: a.contact_name || "",
       auto_send: Boolean(a.auto_send), wa_notify: a.agent_wa_notify ?? (a.id !== (ctx.defaultAgencyId && ctx.defaultAgencyId())), login_emails: a.login_emails || [], autoSendReady: a.auto_send !== undefined,
       gmail: { email: a.gmail_email || null, connected_at: a.gmail_connected_at || null, backfill: a.gmail_backfill_status || null,
         error: a.gmail_error || h.err || null, last_ok: h.okAt || null, seen: h.seen ?? null },
@@ -121,6 +131,10 @@ module.exports = function makeDashboard(ctx) {
       const b = await body(req);
       const name = String(b.name || "").trim().replace(/\s+/g, " ").slice(0, 80);
       const contact = String(b.contact || "").trim().slice(0, 80);
+      const gstin = String(b.gstin || "").toUpperCase().replace(/\s/g, "");
+      if (gstin && !validGstin(gstin)) return json(res, 400, { error: "GSTIN is not valid — please check the 15 characters" }), true;
+      const legal = String(b.legal_name || "").trim().slice(0, 120), addr = String(b.billing_address || "").trim().slice(0, 300);
+      if (gstin && (!legal || !addr)) return json(res, 400, { error: "With a GSTIN, please also enter the legal name and billing address (as on the GST certificate)" }), true;
       const phone = String(b.phone || "").replace(/[^\d+ ]/g, "").trim();
       if (name.length < 3) return json(res, 400, { error: "Enter your agency name" }), true;
       if (phone.replace(/\D/g, "").length < 10) return json(res, 400, { error: "Enter a phone number with at least 10 digits" }), true;
@@ -132,7 +146,7 @@ module.exports = function makeDashboard(ctx) {
       while (list.some((a) => a.slug === slug)) slug = `${base}-${i++}`;
       const row = { name, slug, contact_name: contact || null, plan: "trial", trial_ends_at: new Date(Date.now() + 30 * DAY).toISOString(),
         notify_email: sess.email, owner_phone: phone, whatsapp: phone, status: "active", login_emails: [sess.email],
-        alerts_email: `${slug}@aviolink.in`, welcome_sent: true };
+        alerts_email: `${slug}@aviolink.in`, welcome_sent: true, gstin: gstin || null, legal_name: legal || null, billing_address: addr || null };
       let ins = await sb.from("agencies").insert(row).select("id").single();
       if (ins.error && /column/i.test(ins.error.message)) { // older table: keep only the core fields
         const { name: n, slug: s, plan, trial_ends_at, notify_email, owner_phone, whatsapp } = row;
@@ -142,7 +156,7 @@ module.exports = function makeDashboard(ctx) {
       await loadAgencies();
       setSession(res, host, { email: sess.email, admin: false, agencyId: ins.data.id, actAs: null, exp: Date.now() + 30 * DAY });
       const welcomed = ctx.sendSignupWelcome ? await ctx.sendSignupWelcome({ ...row, id: ins.data.id }, sess.email).catch((e) => { console.error("[welcome]", e.message); return false; }) : false;
-      await adminCard(`🆕 <b>NEW AGENCY SIGNUP</b>\n🏢 ${esc(name)}${contact ? " · " + esc(contact) : ""}\n📧 ${esc(sess.email)} · 📞 ${esc(phone)}\n30-day trial started — next step for them: connect Gmail.\n${welcomed ? "✉️ Welcome mail sent from support@aviolink.in" : "✉️ Welcome mail NOT sent (support mail not set up)"}`).catch(() => {});
+      await adminCard(`🆕 <b>NEW AGENCY SIGNUP</b>\n🏢 ${esc(name)}${contact ? " · " + esc(contact) : ""}\n📧 ${esc(sess.email)} · 📞 ${esc(phone)}${gstin ? "\n🧾 GSTIN " + esc(gstin) + " · " + esc(legal) : "\n🧾 No GSTIN given"}\n30-day trial started — next step for them: connect Gmail.\n${welcomed ? "✉️ Welcome mail sent from support@aviolink.in" : "✉️ Welcome mail NOT sent (support mail not set up)"}`).catch(() => {});
       return json(res, 200, { ok: true }), true;
     }
 
@@ -246,6 +260,13 @@ module.exports = function makeDashboard(ctx) {
       if (typeof b.name === "string" && b.name.trim().length >= 2) upd.name = b.name.trim().slice(0, 80);
       if (typeof b.owner_phone === "string") { const d = b.owner_phone.replace(/[^\d+ ]/g, "").trim(); if (d.replace(/\D/g, "").length >= 10) upd.owner_phone = d; else return json(res, 400, { error: "Phone must have at least 10 digits" }), true; }
       if (typeof b.notify_email === "string") upd.notify_email = lc(b.notify_email) || null;
+      if (typeof b.gstin === "string") {
+        const g = b.gstin.toUpperCase().replace(/\s/g, "");
+        if (g && !validGstin(g)) return json(res, 400, { error: "GSTIN is not valid — please check the 15 characters" }), true;
+        upd.gstin = g || null;
+      }
+      if (typeof b.legal_name === "string") upd.legal_name = b.legal_name.trim().slice(0, 120) || null;
+      if (typeof b.billing_address === "string") upd.billing_address = b.billing_address.trim().slice(0, 300) || null;
       if (typeof b.auto_send === "boolean") upd.auto_send = b.auto_send;
       if (typeof b.wa_notify === "boolean") upd.agent_wa_notify = b.wa_notify;
       if (Array.isArray(b.login_emails)) upd.login_emails = [...new Set(b.login_emails.map(lc).filter((e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)))].slice(0, 10);

@@ -23,3 +23,6 @@ alter table agencies add column if not exists agent_wa_notify boolean;
 alter table agencies add column if not exists trial_reminder text;
 alter table agencies add column if not exists paid_until timestamptz;
 alter table agencies add column if not exists rzp_subscription_id text;
+alter table agencies add column if not exists gstin text;
+alter table agencies add column if not exists legal_name text;
+alter table agencies add column if not exists billing_address text;

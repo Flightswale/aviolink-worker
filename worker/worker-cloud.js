@@ -345,6 +345,37 @@ async function pollTelegram() {
       job.catch((e) => adminCard(`🧪 ${cmd} failed: ${esc(e.message)}`));
       continue;
     }
+    if (txt.startsWith("/watemplates")) {
+      const waba = process.env.WA_WABA_ID || "2690954148013574";
+      const H = { authorization: `Bearer ${WA.token}`, "content-type": "application/json" };
+      const L1 = (n, a, b, c) => `\u2708\uFE0F {{${n}}}\n${a}: {{${n + 1}}}\n${b}: {{${n + 2}}}`;
+      const head = (verb) => `Dear {{1}},\n\nThe airline has ${verb} your booking PNR {{2}} with {{3}}.\n\n`;
+      const tail = (n) => `\n\nFor any queries, please contact {{${n}}} at {{${n + 1}}}. Thank you.`;
+      const ex1 = ["Mr. Rahul Sharma", "AB12CD", "IndiGo (6E)", "PNQ \u2192 DEL", "6E 2418 \u00b7 10 Dec \u00b7 06:10-08:15", "6E 2418 \u00b7 10 Dec \u00b7 06:40-08:45"];
+      const ex2 = ["DEL \u2192 PNQ", "6E 2419 \u00b7 14 Dec \u00b7 19:00-21:05", "6E 2419 \u00b7 14 Dec \u00b7 19:30-21:35"];
+      const exC1 = ["Mr. Rahul Sharma", "AB12CD", "IndiGo (6E)", "PNQ \u2192 DEL", "6E 2418 \u00b7 10 Dec \u00b7 06:10-08:15", "6E 2422 \u00b7 10 Dec \u00b7 09:30-11:35"];
+      const exC2 = ["DEL \u2192 PNQ", "6E 2419 \u00b7 14 Dec \u00b7 19:00-21:05", "Not offered by the airline - full refund applicable"];
+      const ag = ["Finch Travels", "+91 92705 46474"];
+      const defs = [
+        ["flight_change_1leg", head("changed the schedule of") + L1(4, "Previous", "Revised") + tail(7), [...ex1, ...ag]],
+        ["flight_change_2leg", head("changed the schedule of") + L1(4, "Previous", "Revised") + "\n\n" + L1(7, "Previous", "Revised") + tail(10), [...ex1, ...ex2, ...ag]],
+        ["flight_cancel_1leg", head("cancelled a flight in") + L1(4, "Cancelled", "Alternative") + tail(7), [...exC1, ...ag]],
+        ["flight_cancel_2leg", head("cancelled flights in") + L1(4, "Cancelled", "Alternative") + "\n\n" + L1(7, "Cancelled", "Alternative") + tail(10), [...exC1, ...exC2, ...ag]],
+      ];
+      const out = [];
+      for (const [name, text, ex] of defs) {
+        const body = { name, language: "en", category: "UTILITY", components: [
+          { type: "BODY", text, example: { body_text: [ex] } },
+          { type: "FOOTER", text: "Reply STOP to stop flight alerts" },
+          { type: "BUTTONS", buttons: [{ type: "QUICK_REPLY", text: "Stop alerts" }] } ] };
+        const r = await fetch(`https://graph.facebook.com/v20.0/${waba}/message_templates`, { method: "POST", headers: H, body: JSON.stringify(body) }).then((x) => x.json()).catch((e) => ({ error: { message: e.message } }));
+        out.push(r.id ? `\u2705 ${name}: submitted (${r.status || "PENDING"})` : `\u274c ${name}: ${r.error?.error_user_msg || r.error?.message || JSON.stringify(r).slice(0, 200)}`);
+      }
+      const list = await fetch(`https://graph.facebook.com/v20.0/${waba}/message_templates?fields=name,status,category,rejected_reason&limit=50`, { headers: H }).then((x) => x.json()).catch(() => ({}));
+      const st = (list.data || []).filter((t) => /^flight_/.test(t.name)).map((t) => `${t.name}: ${t.status}${t.category ? " \u00b7 " + t.category : ""}${t.rejected_reason && t.rejected_reason !== "NONE" ? " \u00b7 " + t.rejected_reason : ""}`).join("\n");
+      await tg("sendMessage", { chat_id: u.message.chat.id, text: `${out.join("\n")}\n\nAll flight templates now:\n${st || "-"}\n\nSend /watemplates again any time to see the status (already-existing ones just show as errors).` });
+      continue;
+    }
     if (txt.startsWith("/wasub")) {
       const waba = process.env.WA_WABA_ID || "2690954148013574";
       const H = { authorization: `Bearer ${WA.token}`, "content-type": "application/json" };

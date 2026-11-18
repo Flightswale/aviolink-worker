@@ -294,6 +294,13 @@ async function pollTelegram() {
     // /retest PNR  -> forget this PNR's recent mails + alerts so the next poll re-reads them (no re-forwarding needed)
     const txt = (u.message?.text || "").trim();
     if (txt.startsWith("/report")) { await nightlyReport(true); continue; }
+    if (/^\/(buildtests|selftest|acceptall)/.test(txt)) {
+      const cmd = txt.match(/^\/(\w+)/)[1];
+      await tg("sendMessage", { chat_id: u.message.chat.id, text: cmd === "buildtests" ? "🧪 Collecting real airline mails from Gmail for the test set… (a few minutes)" : cmd === "selftest" ? "🧪 Re-reading every test mail with the current code… (a few minutes)" : "🧪 Updating expected results…" });
+      const job = cmd === "buildtests" ? SELFTEST.build("") : cmd === "selftest" ? SELFTEST.run("on request") : SELFTEST.acceptAll();
+      job.catch((e) => adminCard(`🧪 ${cmd} failed: ${esc(e.message)}`));
+      continue;
+    }
     if (txt.startsWith("/wasub")) {
       const waba = process.env.WA_WABA_ID || "2690954148013574";
       const H = { authorization: `Bearer ${WA.token}`, "content-type": "application/json" };
@@ -661,6 +668,24 @@ https://aviolink.in`,
 
 // ---------- mail polling ----------
 // One mail, from any source (IMAP forward inbox or an agency's own Gmail) -> same pipeline.
+// ---------- self-test from real mails ----------
+async function readMailForTest(raw) {
+  const email = splitEmail(raw);
+  const marked = await strikeAwareBody(raw); if (marked) email.body = marked;
+  email.toDisplayName = null;
+  const pdfText = await extractPdfTexts(raw); if (pdfText) email.body += "\n\n===PDF ATTACHMENT TEXT===\n" + pdfText;
+  return parseEmail(raw, { ai: Boolean(CFG.anthropicKey), apiKey: CFG.anthropicKey || undefined, email });
+}
+const SELFTEST = require("./selftest")({ sb, gmail, gmailAccess: (a) => gmailAccess(a), getAgencies: () => AGENCIES, readMail: readMailForTest, adminCard, esc });
+async function selfTestAfterUpdate() {
+  try {
+    const { count, error } = await sb.from("test_mails").select("id", { count: "exact", head: true });
+    if (error) { console.log("[selftest] table test_mails not created yet"); return; }
+    if (!count) await SELFTEST.build("(first time, automatic)");
+    else await SELFTEST.run("after update");
+  } catch (e) { console.error("[selftest]", e.message); }
+}
+
 // ---------- AI outage: never lose a mail ----------
 // If the AI reader errors (bad key, no credit, overload, network), the mail is NOT logged,
 // so the next poll reads it again. Telegram is told once, and again when AI is back.
@@ -1199,6 +1224,7 @@ Reason: ${esc(why)}`);
 (async () => {
   await loadAgencies();
   requeueUnparsed().catch((e) => console.error("[requeue]", e.message));
+  setTimeout(selfTestAfterUpdate, 10 * 60000); // every deploy restarts the worker → test the new code on real mails
   try {
     const { data: stuck } = await sb.from("agencies").update({ gmail_backfill_status: "pending" }).eq("gmail_backfill_status", "running").select("id");
     if (stuck && stuck.length) { console.log(`[backfill] ${stuck.length} interrupted backfill(s) will resume`); await loadAgencies(); }

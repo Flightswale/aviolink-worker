@@ -1263,15 +1263,26 @@ async function watchdog() {
 }
 let lastReportDay = "";
 // WhatsApp health: warn the moment quality / limit / status / name changes
-let WA_HEALTH = null, waHealthAt = 0;
+let WA_HEALTH = null, waHealthAt = 0, WA_TPL_STATE = null;
 async function waQualityWatch(force = false) {
-  if (!WA.enabled() || (!force && Date.now() - waHealthAt < 3 * 3600000)) return;
+  if (!WA.enabled() || (!force && Date.now() - waHealthAt < 3600000)) return;
   waHealthAt = Date.now();
   try {
     const r = await fetch(`https://graph.facebook.com/v20.0/${WA.phoneId}?fields=quality_rating,messaging_limit_tier,status,name_status`, { headers: { authorization: `Bearer ${WA.token}` } });
     const h = await r.json();
     if (!r.ok) return;
     const prev = WA_HEALTH; WA_HEALTH = h;
+    // template approvals: tell the operator when any template changes status (approved / rejected / paused)
+    try {
+      const waba = process.env.WA_WABA_ID || "2690954148013574";
+      const tl = await fetch(`https://graph.facebook.com/v20.0/${waba}/message_templates?fields=name,status&limit=50`, { headers: { authorization: `Bearer ${WA.token}` } }).then((x) => x.json());
+      const now = Object.fromEntries((tl.data || []).map((t) => [t.name, t.status]));
+      if (WA_TPL_STATE) {
+        const ch = Object.keys(now).filter((k) => WA_TPL_STATE[k] !== now[k]);
+        if (ch.length) await adminCard(`📋 <b>WhatsApp template update</b>\n${ch.map((k) => `${esc(k)}: ${esc(WA_TPL_STATE[k] || "new")} → <b>${esc(now[k])}</b>`).join("\n")}`);
+      }
+      WA_TPL_STATE = now;
+    } catch (_) {}
     const bad = h.quality_rating && h.quality_rating !== "GREEN";
     const changed = prev && ["quality_rating", "messaging_limit_tier", "status", "name_status"].some((k) => prev[k] !== h[k]);
     if (bad || changed || force) {

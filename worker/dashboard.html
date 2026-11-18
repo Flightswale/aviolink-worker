@@ -173,10 +173,13 @@ function actAsBanner() {
   if (a && (!ME.admin || ME.actAs)) {
     if (!a.gmail || !a.gmail.email) s += `<div class="banner" style="background:#eef1fb;border-color:#c7d0f5;color:var(--navy)">📬 <b>One step left:</b> connect the Gmail where your airline and supplier mails arrive. <a class="btn pri" style="text-decoration:none" href="/api/gmail/connect">Connect Gmail</a></div>`;
     else if (a.gmail.backfill && a.gmail.backfill !== "done") s += `<div class="banner" style="background:#eef1fb;border-color:#c7d0f5;color:var(--navy)">⏳ Reading your past 12 months of ticket mails — new changes appear here as they arrive.</div>`;
+    const subBtn = `<button class="btn green" data-subscribe>Subscribe${a.price ? " · ₹" + Number(a.price).toLocaleString("en-IN") + "/month" : ""}</button>`;
     if (a.plan === "trial" && a.trial_ends_at) {
       const days = Math.ceil((new Date(a.trial_ends_at) - Date.now()) / 86400000);
-      if (days <= 0) s += `<div class="banner" style="background:var(--badb);border-color:#fca5a5;color:var(--bad)">Your free trial has ended. To keep receiving alerts, write to <a href="mailto:support@aviolink.in">support@aviolink.in</a> or WhatsApp +91 92705 46474.</div>`;
-      else if (days <= 7) s += `<div class="banner">Free trial: <b>${days} day${days === 1 ? "" : "s"}</b> left. To continue, write to <a href="mailto:support@aviolink.in">support@aviolink.in</a>.</div>`;
+      if (days <= 0) s += `<div class="banner" style="background:var(--badb);border-color:#fca5a5;color:var(--bad)">Your free trial has ended — new alerts are paused. ${subBtn}</div>`;
+      else if (days <= 7) s += `<div class="banner">Free trial: <b>${days} day${days === 1 ? "" : "s"}</b> left. Subscribe now so alerts never stop. ${subBtn}</div>`;
+    } else if (a.plan === "paid" && a.paid_until && new Date(a.paid_until) < new Date()) {
+      s += `<div class="banner" style="background:var(--badb);border-color:#fca5a5;color:var(--bad)">Payment due — new alerts are paused. ${subBtn}</div>`;
     }
   }
   return s;
@@ -322,7 +325,7 @@ function vSettings(m) {
       <div class="field"><label>Sending</label><div class="toggle"><input type="checkbox" id="s-auto" ${a.auto_send ? "checked" : ""}><div><b>Send to clients automatically</b><br><small class="mut">When the alert has full details (PNR, passenger names, client mobile) and Aviolink is confident, it goes to the client without waiting for you. Anything uncertain still waits in “To send”.</small></div></div></div>
       <div class="field"><label>Notifications</label><div class="toggle"><input type="checkbox" id="s-notify" ${a.wa_notify ? "checked" : ""}><div><b>WhatsApp me when a new alert arrives</b><br><small class="mut">A short message on ${h(a.whatsapp || a.owner_phone || "your phone")}: which PNR changed, with a link to this dashboard.</small></div></div></div>
       <div class="field"><label>Team logins</label><input id="s-team" value="${h((a.login_emails || []).join(", "))}" placeholder="staff1@gmail.com, staff2@gmail.com"><small>Other Google emails allowed to open this dashboard. ${h(a.gmail?.email || "")} can always log in.</small></div>
-      <div class="field"><label>Plan</label><div>${a.plan === "trial" ? `Free trial${a.trial_ends_at ? " — ends " + new Date(a.trial_ends_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : ""}` : h(a.plan || "-")}</div></div>
+      <div class="field"><label>Plan</label><div>${a.plan === "trial" ? `Free trial${a.trial_ends_at ? " — ends " + new Date(a.trial_ends_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : ""}<div style="margin-top:8px"><button class="btn green" data-subscribe>Subscribe${a.price ? " · ₹" + Number(a.price).toLocaleString("en-IN") + "/month" : ""}</button></div><small class="mut">UPI AutoPay or card · renews every month automatically · cancel anytime</small>` : a.plan === "paid" ? `Paid${a.paid_until ? " — valid till " + new Date(a.paid_until).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) + ", renews automatically" : ""}` : h(a.plan || "-")}</div></div>
     </div></div>
     <button class="btn pri" id="s-save">Save settings</button>`;
   $("#s-save").onclick = async () => {
@@ -362,6 +365,12 @@ async function vAgencies(m) {
   });
 }
 
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-subscribe]"); if (!b) return;
+  b.disabled = true; const t = b.textContent; b.textContent = "Opening payment…";
+  try { const r = await post("/api/billing/subscribe"); location.href = r.url; }
+  catch (err) { toast(err.message); b.disabled = false; b.textContent = t; }
+});
 async function boot() {
   try { ME = await api("/api/me"); }
   catch (e) { if (e.message === "suspended") { history.replaceState(null, "", "?e=suspended"); renderLogin(); } else if (e.message !== "login") renderLogin(); return; }

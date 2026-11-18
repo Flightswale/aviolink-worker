@@ -52,6 +52,7 @@ module.exports = function makeDashboard(ctx) {
     const h = GMAIL_HEALTH.get(a.id) || {};
     return {
       id: a.id, name: a.name, slug: a.slug, plan: a.plan, trial_ends_at: a.trial_ends_at, status: a.status || "active",
+      paid_until: a.paid_until || null, billingReady: Boolean(ctx.billing && ctx.billing.enabled()), price: ctx.billing ? ctx.billing.price : null,
       owner_phone: a.owner_phone, whatsapp: a.whatsapp, notify_email: a.notify_email, alerts_email: a.alerts_email,
       auto_send: Boolean(a.auto_send), wa_notify: a.agent_wa_notify ?? (a.id !== (ctx.defaultAgencyId && ctx.defaultAgencyId())), login_emails: a.login_emails || [], autoSendReady: a.auto_send !== undefined,
       gmail: { email: a.gmail_email || null, connected_at: a.gmail_connected_at || null, backfill: a.gmail_backfill_status || null,
@@ -230,6 +231,13 @@ module.exports = function makeDashboard(ctx) {
     }
 
     // Settings
+    if (p === "/api/billing/subscribe" && req.method === "POST") {
+      const ag = sess.actAs || sess.agencyId;
+      if (!ag || !ctx.billing) return json(res, 400, { error: "no agency" }), true;
+      try { const url = await ctx.billing.subscribe(await agencyById(ag), sess.email); return json(res, 200, { url }), true; }
+      catch (e) { return json(res, 400, { error: e.message }), true; }
+    }
+
     if (p === "/api/settings" && req.method === "POST") {
       const ag = sess.actAs || sess.agencyId;
       if (!ag) return json(res, 400, { error: "no agency" }), true;

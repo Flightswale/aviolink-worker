@@ -21,3 +21,5 @@ create table if not exists wa_optout (phone text primary key, created_at timesta
 alter table wa_optout enable row level security;
 alter table agencies add column if not exists agent_wa_notify boolean;
 alter table agencies add column if not exists trial_reminder text;
+alter table agencies add column if not exists paid_until timestamptz;
+alter table agencies add column if not exists rzp_subscription_id text;

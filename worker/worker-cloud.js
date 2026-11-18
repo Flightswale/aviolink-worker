@@ -278,9 +278,9 @@ async function loadAgencies() {
   }
   if (error) { console.error("[agencies-error]", error.message); return; }
   AGENCIES = data || [];
-  let ext = await sb.from("agencies").select("id,status,auto_send,agent_wa_notify");
+  let ext = await sb.from("agencies").select("id,status,auto_send,agent_wa_notify,paid_until");
   if (ext.error) ext = await sb.from("agencies").select("id,status,auto_send");
-  if (!ext.error) { const m = new Map(ext.data.map((x) => [x.id, x])); for (const a of AGENCIES) { const x = m.get(a.id) || {}; Object.assign(a, { status: x.status || "active", auto_send: Boolean(x.auto_send), agent_wa_notify: x.agent_wa_notify ?? null }); } }
+  if (!ext.error) { const m = new Map(ext.data.map((x) => [x.id, x])); for (const a of AGENCIES) { const x = m.get(a.id) || {}; Object.assign(a, { status: x.status || "active", auto_send: Boolean(x.auto_send), agent_wa_notify: x.agent_wa_notify ?? null, paid_until: x.paid_until || null }); } }
   DEFAULT_AGENCY = AGENCIES.find((a) => a.slug === CFG.agencySlug) || AGENCIES[0] || null;
   console.log(`[agencies] loaded ${AGENCIES.length} (default: ${DEFAULT_AGENCY?.name})`);
 }
@@ -313,7 +313,7 @@ function resolveAgency(rawHead, email) {
 }
 function trialActive(a) {
   if (!a || a.status === "suspended") return false;
-  if (a.plan !== "trial") return true; // paid/starter/etc.
+  if (a.plan !== "trial") return !a.paid_until || new Date(a.paid_until) > new Date(); // paid: until the paid period ends
   return !a.trial_ends_at || new Date(a.trial_ends_at) > new Date();
 }
 
@@ -1387,7 +1387,7 @@ async function trialReminders() {
       const subj = step === "ended" ? "Your Aviolink trial has ended" : `Your Aviolink trial ends ${left === 1 ? "tomorrow" : "on " + end}`;
       const lead = step === "ended" ? "Your free trial has ended, so new flight-change alerts are paused." : `Your free trial ends ${left === 1 ? "tomorrow" : "on <b>" + end + "</b>"}.`;
       await m.sendMail({ from: `"Aviolink" <${process.env.SUPPORT_SMTP_USER}>`, to: a.notify_email, bcc: process.env.SUPPORT_SMTP_USER, subject: subj,
-        html: `<div style="font-family:Arial,sans-serif;max-width:560px;color:#141B4D;line-height:1.55"><p>Hi ${esc(a.contact_name || a.name)},</p><p>${lead}</p><p>So far Aviolink has caught <b>${count || 0} flight change${count === 1 ? "" : "s"}</b> for ${esc(a.name)}.</p><p>To ${step === "ended" ? "switch alerts back on" : "keep receiving alerts without a break"}, just reply to this mail or WhatsApp us at <b>+91 92705 46474</b> — we'll set up your plan.</p><p style="margin:22px 0"><a href="https://app.aviolink.in" style="background:#1E2761;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold">Open your dashboard</a></p><p>Team Aviolink · <a href="https://aviolink.in">aviolink.in</a></p></div>` }).catch((e) => console.error("[trial-mail]", e.message));
+        html: `<div style="font-family:Arial,sans-serif;max-width:560px;color:#141B4D;line-height:1.55"><p>Hi ${esc(a.contact_name || a.name)},</p><p>${lead}</p><p>So far Aviolink has caught <b>${count || 0} flight change${count === 1 ? "" : "s"}</b> for ${esc(a.name)}.</p><p>To ${step === "ended" ? "switch alerts back on" : "keep receiving alerts without a break"}, click <b>Subscribe</b> in your dashboard (UPI AutoPay or card, renews monthly), or reply to this mail / WhatsApp us at <b>+91 92705 46474</b>.</p><p style="margin:22px 0"><a href="https://app.aviolink.in" style="background:#1E2761;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold">Open your dashboard</a></p><p>Team Aviolink · <a href="https://aviolink.in">aviolink.in</a></p></div>` }).catch((e) => console.error("[trial-mail]", e.message));
     }
     await sb.from("agencies").update({ trial_reminder: step }).eq("id", a.id);
   }
@@ -1425,9 +1425,10 @@ async function weeklyMarketing(force = false) {
 }
 
 // ---------- HTTP: OAuth callback + health ----------
-let DASH = null;
+let DASH = null, BILLING = null;
 function startHttp() {
-  DASH = require("./dashboard")({ sb, gmail, getAgencies: () => AGENCIES, defaultAgencyId: () => DEFAULT_AGENCY?.id, sendSignupWelcome, loadAgencies, GMAIL_HEALTH, sendAlertToClient, adminCard, esc, waEnabled: () => WA.enabled() });
+  BILLING = require("./billing")({ sb, adminCard, esc, loadAgencies });
+  DASH = require("./dashboard")({ billing: BILLING, sb, gmail, getAgencies: () => AGENCIES, defaultAgencyId: () => DEFAULT_AGENCY?.id, sendSignupWelcome, loadAgencies, GMAIL_HEALTH, sendAlertToClient, adminCard, esc, waEnabled: () => WA.enabled() });
   const port = Number(process.env.PORT || 8080);
   const site = (process.env.SITE_URL || "https://aviolink.in").replace(/\/$/, "");
   http.createServer(async (req, res) => {
@@ -1438,6 +1439,12 @@ function startHttp() {
         return res.end(u.pathname === "/privacy" ? PRIVACY_HTML : TERMS_HTML);
       }
       // WhatsApp webhook: delivery statuses (sent/delivered/read/failed) + client replies
+      if (u.pathname === "/webhook/razorpay" && req.method === "POST") {
+        let raw = ""; for await (const c of req) raw += c;
+        const r = await BILLING.webhook(raw, req.headers["x-razorpay-signature"]).catch((e) => ({ ok: false, err: e.message }));
+        if (!r.ok) console.error("[razorpay]", r.err);
+        res.writeHead(r.ok ? 200 : 400); res.end(r.ok ? "ok" : "no"); return;
+      }
       if (u.pathname === "/webhook/whatsapp") {
         if (req.method === "GET") {
           const ok = u.searchParams.get("hub.mode") === "subscribe" && u.searchParams.get("hub.verify_token") === (process.env.WA_VERIFY_TOKEN || "aviolink-wa-verify");

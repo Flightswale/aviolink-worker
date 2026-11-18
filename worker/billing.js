@@ -67,5 +67,17 @@ module.exports = function makeBilling({ sb, adminCard, esc, loadAgencies }) {
     return { ok: true };
   }
 
-  return { enabled, subscribe, webhook, price: PRICE };
+  // Health check for /billing: keys work, plan exists, webhook secret present
+  async function check() {
+    const out = [];
+    out.push(`Keys: ${KEY ? (KEY.startsWith("rzp_live_") ? "LIVE ✅" : KEY.startsWith("rzp_test_") ? "TEST ⚠️ (no real money)" : "set") : "❌ RAZORPAY_KEY_ID missing"}${SECRET ? "" : " · ❌ RAZORPAY_KEY_SECRET missing"}`);
+    out.push(`Webhook secret: ${WH ? "✅ set" : "❌ RAZORPAY_WEBHOOK_SECRET missing"}`);
+    if (enabled()) {
+      try { const id = await ensurePlan(); const p = await rzp("GET", `/plans/${id}`); out.push(`Login to Razorpay: ✅\nMonthly plan: ✅ ${id} · ₹${(p.item.amount / 100).toLocaleString("en-IN")} / month`); }
+      catch (e) { out.push(`Razorpay: ❌ ${e.message}`); }
+    }
+    return out.join("\n");
+  }
+
+  return { enabled, subscribe, webhook, check, price: PRICE };
 };

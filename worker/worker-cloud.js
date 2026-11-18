@@ -348,6 +348,7 @@ async function pollTelegram() {
     // /retest PNR  -> forget this PNR's recent mails + alerts so the next poll re-reads them (no re-forwarding needed)
     const txt = (u.message?.text || "").trim();
     if (txt.startsWith("/report")) { await nightlyReport(true); continue; }
+    if (txt.startsWith("/billing")) { await adminCard(`💳 <b>BILLING CHECK</b>\n${esc(await BILLING.check())}\n\nWebhook URL in Razorpay must be: https://api.aviolink.in/webhook/razorpay`); continue; }
     if (txt.startsWith("/marketing")) { try { await weeklyMarketing(true); } catch (e) { await adminCard(`📣 Marketing post failed: ${esc(e.message)}`); } continue; }
     if (txt.startsWith("/proof")) {
       const [, d, s] = txt.split(/\s+/);

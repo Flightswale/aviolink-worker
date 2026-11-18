@@ -348,6 +348,7 @@ async function pollTelegram() {
     // /retest PNR  -> forget this PNR's recent mails + alerts so the next poll re-reads them (no re-forwarding needed)
     const txt = (u.message?.text || "").trim();
     if (txt.startsWith("/report")) { await nightlyReport(true); continue; }
+    if (txt.startsWith("/marketing")) { try { await weeklyMarketing(true); } catch (e) { await adminCard(`📣 Marketing post failed: ${esc(e.message)}`); } continue; }
     if (txt.startsWith("/proof")) {
       const [, d, s] = txt.split(/\s+/);
       try { await adminCard(await proofReport(Math.min(365, Number(d) || 30), s || "")); }
@@ -1352,6 +1353,37 @@ async function proofReport(days = 30, slug = "") {
     `\n\n<i>Every one of these would otherwise depend on someone noticing one mail among ${cAll}.</i>`;
 }
 
+// ---------- weekly marketing: Monday 10 AM IST, ready-to-share posts built from real numbers ----------
+const TIPS = [
+  "Put your own mobile and email in the PNR? Then airline change messages reach only you — make sure someone reads every one of them.",
+  "A re-timing of 20 minutes can break a connection. Always check the onward flight when the first leg moves.",
+  "When an airline cancels, the passenger is entitled to a full refund if no acceptable alternative is offered — inform the client before they reach the airport.",
+  "Night-time changes are the ones most often missed. 1 in 5 changes we see arrive between 9 PM and 8 AM.",
+  "Same PNR, changed twice? Clients should hear about every change, not only the first one.",
+  "Group bookings: one schedule change affects every passenger — inform the group leader and each traveller.",
+  "Check-in opens 24–48 h before departure. A change caught before check-in saves a missed flight at the gate.",
+  "Keep your client's WhatsApp number on the booking — it turns a 20-minute phone round into a 1-tap update.",
+];
+let lastMarketingWeek = "";
+async function weeklyMarketing(force = false) {
+  const ist = new Date(Date.now() + 5.5 * 3600000);
+  const week = `${ist.getUTCFullYear()}-${Math.floor((ist - new Date(Date.UTC(ist.getUTCFullYear(), 0, 1))) / 6048e5)}`;
+  if (!force && (ist.getUTCDay() !== 1 || ist.getUTCHours() !== 10 || lastMarketingWeek === week)) return;
+  lastMarketingWeek = week;
+  const since = new Date(Date.now() - 7 * 86400000).toISOString();
+  const { data: al } = await sb.from("alerts").select("change_type,created_at,payload,status,client_status").gte("created_at", since).limit(5000);
+  const A = (al || []).filter((a) => a.status !== "skipped" && a.client_status !== "ignored");
+  const { count: mails } = await sb.from("mail_log").select("id", { count: "exact", head: true }).gte("created_at", since);
+  const cancels = A.filter((a) => (a.change_type || a.payload?.changeType) === "CANCELLATION").length;
+  const night = A.filter((a) => { const h = new Date(new Date(a.created_at).getTime() + 5.5 * 3600000).getUTCHours(); return h >= 21 || h < 8; }).length;
+  const byAir = {}; for (const a of A) { const k = a.payload?.airline; if (k) byAir[k] = (byAir[k] || 0) + 1; }
+  const top = Object.entries(byAir).sort((x, y) => y[1] - x[1]).slice(0, 3).map(([k, v]) => `${airlineName(k) || k}: ${v}`).join(", ");
+  const tip = TIPS[Math.floor(Date.now() / 6048e5) % TIPS.length];
+  const wa = `✈️ *Airline changes this week*\n\nIn the last 7 days Aviolink caught *${A.length} flight changes* in travel agency mailboxes${cancels ? ` — including *${cancels} cancellations*` : ""}.\n${top ? `Most changes: ${top}.\n` : ""}${night ? `${night} of them arrived between 9 PM and 8 AM.\n` : ""}\n💡 *Tip:* ${tip}\n\nAviolink reads your airline mails and sends your clients a WhatsApp alert in your agency's name. Free 30-day trial: aviolink.in`;
+  const li = `Airline schedule changes this week: ${A.length} caught${cancels ? `, ${cancels} of them cancellations` : ""}${night ? `, ${night} arriving overnight` : ""}.\n\n${top ? `Most active: ${top}.\n\n` : ""}${tip}\n\nAviolink reads ${mails ? `thousands of ` : ""}airline and supplier mails for travel agencies and turns every change into a clear WhatsApp alert for the client — in the agency's own name.\n\nFree 30-day trial → aviolink.in\n\n#TravelAgents #Airlines #TravelTech #IndiGo #FlightChanges`;
+  await adminCard(`📣 <b>WEEKLY MARKETING POSTS</b> — copy, check, share\n\n<b>1) WhatsApp groups / Status:</b>\n<pre>${esc(wa)}</pre>\n<b>2) LinkedIn / Facebook:</b>\n<pre>${esc(li)}</pre>\nNumbers are from the last 7 days, no agency or client names included.`);
+}
+
 // ---------- HTTP: OAuth callback + health ----------
 let DASH = null;
 function startHttp() {
@@ -1458,7 +1490,7 @@ Reason: ${esc(why)}`);
   };
   const tgLoop = async () => { try { await pollTelegram(); } catch (e) { console.error("[tg-error]", e.message); } setTimeout(tgLoop, 3000); };
   const agLoop = async () => { try { await loadAgencies(); await sendWelcomes(); } catch (_) {} setTimeout(agLoop, 120000); };
-  const wdLoop = async () => { try { await watchdog(); await nightlyReport(); await waQualityWatch(); } catch (e) { console.error("[watchdog]", e.message); } setTimeout(wdLoop, 60000); };
+  const wdLoop = async () => { try { await watchdog(); await nightlyReport(); await waQualityWatch(); await weeklyMarketing(); } catch (e) { console.error("[watchdog]", e.message); } setTimeout(wdLoop, 60000); };
   setTimeout(wdLoop, 60000);
   const bfLoop = async () => { if (gmail.enabled()) { try { await runBackfills(); } catch (e) { console.error("[backfill-loop]", e.message); } } setTimeout(bfLoop, 60000); };
   sendWelcomes().catch(()=>{});

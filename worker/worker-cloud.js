@@ -1364,6 +1364,35 @@ async function proofReport(days = 30, slug = "") {
     `\n\n<i>Every one of these would otherwise depend on someone noticing one mail among ${cAll}.</i>`;
 }
 
+// ---------- trial end: reminders to the agency (email) and the operator (Telegram) ----------
+let trialCheckDay = "";
+async function trialReminders() {
+  const ist = new Date(Date.now() + 5.5 * 3600000), day = ist.toISOString().slice(0, 10);
+  if (trialCheckDay === day || ist.getUTCHours() < 10) return; // once a day, from 10 AM IST
+  trialCheckDay = day;
+  const { data, error } = await sb.from("agencies").select("id,name,slug,plan,trial_ends_at,notify_email,contact_name,owner_phone,whatsapp,status,trial_reminder").eq("plan", "trial");
+  if (error) return;
+  for (const a of data || []) {
+    if (!a.trial_ends_at || a.status === "suspended" || a.id === DEFAULT_AGENCY?.id) continue;
+    const left = Math.ceil((new Date(a.trial_ends_at) - Date.now()) / 86400000);
+    const step = left <= 0 ? "ended" : left <= 1 ? "1day" : left <= 7 ? "7days" : null;
+    if (!step || a.trial_reminder === step) continue;
+    if (step === "7days" && a.trial_reminder === "1day") continue;
+    const { count } = await sb.from("alerts").select("id", { count: "exact", head: true }).eq("agency_id", a.id);
+    const phone = a.whatsapp || a.owner_phone || "-";
+    await adminCard(`${step === "ended" ? "⌛ <b>TRIAL ENDED</b>" : `⏳ <b>TRIAL ENDS IN ${left} DAY${left === 1 ? "" : "S"}</b>`} · 🏢 ${esc(a.name)}\n👤 ${esc(a.contact_name || "-")} · 📞 ${esc(phone)} · 📧 ${esc(a.notify_email || "-")}\n⚡ ${count || 0} flight change(s) caught for them so far.\n${step === "ended" ? "Alerts are paused for them. Admin view → More… → Mark as paid / Extend trial." : "Good moment to call them."}`).catch(() => {});
+    const m = getSupportMailer();
+    if (m && a.notify_email) {
+      const end = new Date(a.trial_ends_at).toLocaleDateString("en-IN", { day: "numeric", month: "long" });
+      const subj = step === "ended" ? "Your Aviolink trial has ended" : `Your Aviolink trial ends ${left === 1 ? "tomorrow" : "on " + end}`;
+      const lead = step === "ended" ? "Your free trial has ended, so new flight-change alerts are paused." : `Your free trial ends ${left === 1 ? "tomorrow" : "on <b>" + end + "</b>"}.`;
+      await m.sendMail({ from: `"Aviolink" <${process.env.SUPPORT_SMTP_USER}>`, to: a.notify_email, bcc: process.env.SUPPORT_SMTP_USER, subject: subj,
+        html: `<div style="font-family:Arial,sans-serif;max-width:560px;color:#141B4D;line-height:1.55"><p>Hi ${esc(a.contact_name || a.name)},</p><p>${lead}</p><p>So far Aviolink has caught <b>${count || 0} flight change${count === 1 ? "" : "s"}</b> for ${esc(a.name)}.</p><p>To ${step === "ended" ? "switch alerts back on" : "keep receiving alerts without a break"}, just reply to this mail or WhatsApp us at <b>+91 92705 46474</b> — we'll set up your plan.</p><p style="margin:22px 0"><a href="https://app.aviolink.in" style="background:#1E2761;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold">Open your dashboard</a></p><p>Team Aviolink · <a href="https://aviolink.in">aviolink.in</a></p></div>` }).catch((e) => console.error("[trial-mail]", e.message));
+    }
+    await sb.from("agencies").update({ trial_reminder: step }).eq("id", a.id);
+  }
+}
+
 // ---------- weekly marketing: Monday 10 AM IST, ready-to-share posts built from real numbers ----------
 const TIPS = [
   "Put your own mobile and email in the PNR? Then airline change messages reach only you — make sure someone reads every one of them.",
@@ -1501,7 +1530,7 @@ Reason: ${esc(why)}`);
   };
   const tgLoop = async () => { try { await pollTelegram(); } catch (e) { console.error("[tg-error]", e.message); } setTimeout(tgLoop, 3000); };
   const agLoop = async () => { try { await loadAgencies(); await sendWelcomes(); } catch (_) {} setTimeout(agLoop, 120000); };
-  const wdLoop = async () => { try { await watchdog(); await nightlyReport(); await waQualityWatch(); await weeklyMarketing(); } catch (e) { console.error("[watchdog]", e.message); } setTimeout(wdLoop, 60000); };
+  const wdLoop = async () => { try { await watchdog(); await nightlyReport(); await waQualityWatch(); await weeklyMarketing(); await trialReminders(); } catch (e) { console.error("[watchdog]", e.message); } setTimeout(wdLoop, 60000); };
   setTimeout(wdLoop, 60000);
   const bfLoop = async () => { if (gmail.enabled()) { try { await runBackfills(); } catch (e) { console.error("[backfill-loop]", e.message); } } setTimeout(bfLoop, 60000); };
   sendWelcomes().catch(()=>{});

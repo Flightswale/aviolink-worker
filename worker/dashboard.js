@@ -266,8 +266,9 @@ module.exports = function makeDashboard(ctx) {
         if (["active", "suspended"].includes(b.status)) upd.status = b.status;
         if (["trial", "paid"].includes(b.plan)) upd.plan = b.plan;
         if (b.extendTrialDays) { const a = await agencyById(ag[1]); const base = Math.max(Date.now(), a?.trial_ends_at ? new Date(a.trial_ends_at).getTime() : 0); upd.trial_ends_at = new Date(base + Number(b.extendTrialDays) * DAY).toISOString(); }
+        if (upd.trial_ends_at || upd.plan) upd.trial_reminder = null; // reminders start fresh after extend / plan change
         const { error } = await sb.from("agencies").update(upd).eq("id", ag[1]);
-        if (error) return json(res, 500, { error: /column/.test(error.message) ? "Run dashboard.sql in Supabase first" : error.message }), true;
+        if (error) return json(res, 500, { error: error.message }), true;
         await loadAgencies();
         return json(res, 200, { ok: true }), true;
       }

@@ -19,3 +19,4 @@ create table if not exists test_mails (id bigserial primary key, agency_id text,
 alter table test_mails enable row level security;
 create table if not exists wa_optout (phone text primary key, created_at timestamptz default now());
 alter table wa_optout enable row level security;
+alter table agencies add column if not exists agent_wa_notify boolean;

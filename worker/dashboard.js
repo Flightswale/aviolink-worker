@@ -53,7 +53,7 @@ module.exports = function makeDashboard(ctx) {
     return {
       id: a.id, name: a.name, slug: a.slug, plan: a.plan, trial_ends_at: a.trial_ends_at, status: a.status || "active",
       owner_phone: a.owner_phone, whatsapp: a.whatsapp, notify_email: a.notify_email, alerts_email: a.alerts_email,
-      auto_send: Boolean(a.auto_send), login_emails: a.login_emails || [], autoSendReady: a.auto_send !== undefined,
+      auto_send: Boolean(a.auto_send), wa_notify: a.agent_wa_notify ?? (a.id !== (ctx.defaultAgencyId && ctx.defaultAgencyId())), login_emails: a.login_emails || [], autoSendReady: a.auto_send !== undefined,
       gmail: { email: a.gmail_email || null, connected_at: a.gmail_connected_at || null, backfill: a.gmail_backfill_status || null,
         error: a.gmail_error || h.err || null, last_ok: h.okAt || null, seen: h.seen ?? null },
     };
@@ -93,8 +93,9 @@ module.exports = function makeDashboard(ctx) {
       const ag = agencyForEmail(list, email);
       const admin = ADMINS.includes(email);
       if (!ag && !admin) {
-        setSession(res, back, null);
-        res.writeHead(302, { location: `${home}?e=noaccount&m=${encodeURIComponent(email)}` }); res.end(); return true;
+        // New agency: let them create their account (free trial) with this Google login.
+        setSession(res, back, { email, admin: false, agencyId: null, signup: true, actAs: null, exp: Date.now() + 2 * DAY });
+        res.writeHead(302, { location: home }); res.end(); return true;
       }
       if (ag && !admin && ag.status === "suspended") { res.writeHead(302, { location: `${home}?e=suspended` }); res.end(); return true; }
       setSession(res, back, { email, admin, agencyId: ag?.id || null, actAs: null, exp: Date.now() + 30 * DAY });
@@ -114,7 +115,37 @@ module.exports = function makeDashboard(ctx) {
     if (!sess) return json(res, 401, { error: "login" }), true;
     if (req.method === "POST" && req.headers["x-av"] !== "1") return json(res, 403, { error: "bad request" }), true;
 
+    if (p === "/api/signup" && req.method === "POST") {
+      if (sess.agencyId) return json(res, 400, { error: "This login already has an agency" }), true;
+      const b = await body(req);
+      const name = String(b.name || "").trim().replace(/\s+/g, " ").slice(0, 80);
+      const contact = String(b.contact || "").trim().slice(0, 80);
+      const phone = String(b.phone || "").replace(/[^\d+ ]/g, "").trim();
+      if (name.length < 3) return json(res, 400, { error: "Enter your agency name" }), true;
+      if (phone.replace(/\D/g, "").length < 10) return json(res, 400, { error: "Enter a phone number with at least 10 digits" }), true;
+      if (!b.agree) return json(res, 400, { error: "Please accept the Terms of Service" }), true;
+      const list = await allAgencies();
+      if (agencyForEmail(list, sess.email)) return json(res, 400, { error: "An agency already exists for this email — log out and sign in again" }), true;
+      let base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "agency";
+      let slug = base, i = 2;
+      while (list.some((a) => a.slug === slug)) slug = `${base}-${i++}`;
+      const row = { name, slug, contact_name: contact || null, plan: "trial", trial_ends_at: new Date(Date.now() + 30 * DAY).toISOString(),
+        notify_email: sess.email, owner_phone: phone, whatsapp: phone, status: "active", login_emails: [sess.email],
+        alerts_email: `${slug}@aviolink.in`, welcome_sent: true };
+      let ins = await sb.from("agencies").insert(row).select("id").single();
+      if (ins.error && /column/i.test(ins.error.message)) { // older table: keep only the core fields
+        const { name: n, slug: s, plan, trial_ends_at, notify_email, owner_phone, whatsapp } = row;
+        ins = await sb.from("agencies").insert({ name: n, slug: s, plan, trial_ends_at, notify_email, owner_phone, whatsapp }).select("id").single();
+      }
+      if (ins.error) return json(res, 500, { error: ins.error.message }), true;
+      await loadAgencies();
+      setSession(res, host, { email: sess.email, admin: false, agencyId: ins.data.id, actAs: null, exp: Date.now() + 30 * DAY });
+      await adminCard(`🆕 <b>NEW AGENCY SIGNUP</b>\n🏢 ${esc(name)}${contact ? " · " + esc(contact) : ""}\n📧 ${esc(sess.email)} · 📞 ${esc(phone)}\n30-day trial started — next step for them: connect Gmail.`).catch(() => {});
+      return json(res, 200, { ok: true }), true;
+    }
+
     if (p === "/api/me") {
+      if (!sess.agencyId && !sess.admin && sess.signup) return json(res, 200, { email: sess.email, admin: false, signup: true, agency: null }), true;
       const own = sess.agencyId ? await agencyById(sess.agencyId) : null;
       const act = sess.actAs ? await agencyById(sess.actAs) : null;
       if (!sess.admin && own && own.status === "suspended") return json(res, 403, { error: "suspended" }), true;
@@ -207,6 +238,7 @@ module.exports = function makeDashboard(ctx) {
       if (typeof b.owner_phone === "string") { const d = b.owner_phone.replace(/[^\d+ ]/g, "").trim(); if (d.replace(/\D/g, "").length >= 10) upd.owner_phone = d; else return json(res, 400, { error: "Phone must have at least 10 digits" }), true; }
       if (typeof b.notify_email === "string") upd.notify_email = lc(b.notify_email) || null;
       if (typeof b.auto_send === "boolean") upd.auto_send = b.auto_send;
+      if (typeof b.wa_notify === "boolean") upd.agent_wa_notify = b.wa_notify;
       if (Array.isArray(b.login_emails)) upd.login_emails = [...new Set(b.login_emails.map(lc).filter((e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)))].slice(0, 10);
       const { error } = await sb.from("agencies").update(upd).eq("id", ag);
       if (error) return json(res, 500, { error: /column/.test(error.message) ? "Database update pending — run dashboard.sql in Supabase" : error.message }), true;

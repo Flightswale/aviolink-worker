@@ -244,10 +244,25 @@ by ${esc(actor)}`).catch(() => {});
 }
 // Auto-send (agency setting): only complete, confident alerts with a client mobile on file.
 async function maybeAutoSend(agency, alertId, payload) {
-  if (!agency?.auto_send || !alertId || !WA.enabled() || !trialActive(agency)) return;
-  if ((payload?.confidence || 0) < 0.85) return;
-  const r = await sendAlertToClient(alertId, { actor: "auto-send" });
-  if (!r.ok) await adminCard(`⏸ Auto-send skipped for ${esc(payload?.pnr || "")} · 🏢 ${esc(agency.name)}: ${esc(r.err)}`).catch(() => {});
+  let sent = false;
+  if (agency?.auto_send && alertId && WA.enabled() && trialActive(agency) && (payload?.confidence || 0) >= 0.85) {
+    const r = await sendAlertToClient(alertId, { actor: "auto-send" });
+    sent = r.ok;
+    if (!r.ok) await adminCard(`⏸ Auto-send skipped for ${esc(payload?.pnr || "")} · 🏢 ${esc(agency.name)}: ${esc(r.err)}`).catch(() => {});
+  }
+  if (!sent) await notifyAgentWhatsApp(agency, payload).catch((e) => console.error("[agent-notify]", e.message));
+}
+// Ping the agency on its own WhatsApp: "new change — open your dashboard". On by default for every agency
+// except the operator's own (it gets Telegram); switch in dashboard Settings (agent_wa_notify).
+async function notifyAgentWhatsApp(agency, p) {
+  if (!agency || !WA.enabled() || !trialActive(agency)) return;
+  const on = agency.agent_wa_notify ?? (agency.id !== DEFAULT_AGENCY?.id);
+  const to = agency.whatsapp || agency.owner_phone;
+  if (!on || !to || !p?.pnr) return;
+  const kind = p.changeType === "CANCELLATION" ? "cancellation" : "schedule change";
+  const pax = (p.passengers || []).map(titleName);
+  const r = await sendWhatsAppTemplate(to, "agent_new_alert", [kind, p.pnr, airlineName(p.airline || "") || "-", pax.length ? pax[0] + (pax.length > 1 ? ` +${pax.length - 1}` : "") : "-"].map((x) => clean(x)));
+  if (!r.ok && !/^13200[01]|^132012/.test(r.err)) console.error("[agent-notify]", agency.slug, r.err);
 }
 
 // ---------- agency directory (refreshed every 5 min) ----------
@@ -263,8 +278,9 @@ async function loadAgencies() {
   }
   if (error) { console.error("[agencies-error]", error.message); return; }
   AGENCIES = data || [];
-  const ext = await sb.from("agencies").select("id,status,auto_send");
-  if (!ext.error) { const m = new Map(ext.data.map((x) => [x.id, x])); for (const a of AGENCIES) Object.assign(a, { status: m.get(a.id)?.status || "active", auto_send: Boolean(m.get(a.id)?.auto_send) }); }
+  let ext = await sb.from("agencies").select("id,status,auto_send,agent_wa_notify");
+  if (ext.error) ext = await sb.from("agencies").select("id,status,auto_send");
+  if (!ext.error) { const m = new Map(ext.data.map((x) => [x.id, x])); for (const a of AGENCIES) { const x = m.get(a.id) || {}; Object.assign(a, { status: x.status || "active", auto_send: Boolean(x.auto_send), agent_wa_notify: x.agent_wa_notify ?? null }); } }
   DEFAULT_AGENCY = AGENCIES.find((a) => a.slug === CFG.agencySlug) || AGENCIES[0] || null;
   console.log(`[agencies] loaded ${AGENCIES.length} (default: ${DEFAULT_AGENCY?.name})`);
 }
@@ -360,6 +376,7 @@ async function pollTelegram() {
         ["flight_change_1leg", head("changed the schedule of") + L1(4, "Previous", "Revised") + tail(7), [...ex1, ...ag]],
         ["flight_change_2leg", head("changed the schedule of") + L1(4, "Previous", "Revised") + "\n\n" + L1(7, "Previous", "Revised") + tail(10), [...ex1, ...ex2, ...ag]],
         ["flight_cancel_1leg", head("cancelled a flight in") + L1(4, "Cancelled", "Alternative") + tail(7), [...exC1, ...ag]],
+        ["agent_new_alert", "New flight {{1}} for PNR {{2}} ({{3}}).\nPassenger: {{4}}\n\nOpen your Aviolink dashboard to check it and send it to your client: https://app.aviolink.in", ["schedule change", "AB12CD", "IndiGo (6E)", "Mr. Rahul Sharma"]],
         ["flight_cancel_2leg", head("cancelled flights in") + L1(4, "Cancelled", "Alternative") + "\n\n" + L1(7, "Cancelled", "Alternative") + tail(10), [...exC1, ...exC2, ...ag]],
       ];
       const out = [];
@@ -1306,7 +1323,7 @@ async function proofReport(days = 30, slug = "") {
 // ---------- HTTP: OAuth callback + health ----------
 let DASH = null;
 function startHttp() {
-  DASH = require("./dashboard")({ sb, gmail, getAgencies: () => AGENCIES, loadAgencies, GMAIL_HEALTH, sendAlertToClient, adminCard, esc, waEnabled: () => WA.enabled() });
+  DASH = require("./dashboard")({ sb, gmail, getAgencies: () => AGENCIES, defaultAgencyId: () => DEFAULT_AGENCY?.id, loadAgencies, GMAIL_HEALTH, sendAlertToClient, adminCard, esc, waEnabled: () => WA.enabled() });
   const port = Number(process.env.PORT || 8080);
   const site = (process.env.SITE_URL || "https://aviolink.in").replace(/\/$/, "");
   http.createServer(async (req, res) => {
@@ -1336,6 +1353,7 @@ function startHttp() {
       if (cm) {
         if (!gmail.enabled()) return page("Not ready", "Google sign-in is not configured yet.");
         const a = AGENCIES.find((x) => x.slug === cm[1]);
+        if (a && a.gmail_refresh_token) return page("Already connected", "This agency's Gmail is already connected. To change it, log in at app.aviolink.in → Gmail → Reconnect.");
         if (!a) return page("Unknown agency", `No agency called “${esc(cm[1])}”. Pick one:<br><br>${AGENCIES.map((x) => `<a href="/connect/${x.slug}">${esc(x.name)}</a>${x.gmail_email ? " ✅ " + esc(x.gmail_email) : ""}`).join("<br>")}`);
         res.writeHead(302, { location: gmail.authUrl(a.id) }); return res.end();
       }
@@ -1367,7 +1385,8 @@ Reason: ${esc(why)}`);
         await loadAgencies();
         const a = AGENCIES.find((x) => x.id === agencyId);
         await adminCard(`🔗 <b>GMAIL CONNECTED</b> · 🏢 ${esc(a?.name || agencyId)}\n${esc(prof.emailAddress)} — backfill starting`);
-        return page("✅ Gmail connected", `<b>${esc(prof.emailAddress)}</b> is now linked to <b>${esc(a?.name || "your agency")}</b>.<br><br>We are reading your past 12 months of ticket mails, then watching every new schedule change and cancellation. You can close this page.`);
+        const dash = /aviolink\.in$/.test(gmail.PUBLIC_URL.replace(/^https?:\/\//, "").split("/")[0]) ? "https://app.aviolink.in" : `${gmail.PUBLIC_URL}/app`;
+        return page("✅ Gmail connected", `<b>${esc(prof.emailAddress)}</b> is now linked to <b>${esc(a?.name || "your agency")}</b>.<br><br>Aviolink is reading your past 12 months of ticket mails, then watches every new schedule change and cancellation.<br><br><a href="${dash}" style="display:inline-block;background:#1E2761;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600">Open your dashboard</a>`);
       }
       res.writeHead(404); res.end("not found");
     } catch (e) {

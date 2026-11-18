@@ -294,6 +294,12 @@ async function pollTelegram() {
     // /retest PNR  -> forget this PNR's recent mails + alerts so the next poll re-reads them (no re-forwarding needed)
     const txt = (u.message?.text || "").trim();
     if (txt.startsWith("/report")) { await nightlyReport(true); continue; }
+    if (txt.startsWith("/proof")) {
+      const [, d, s] = txt.split(/\s+/);
+      try { await adminCard(await proofReport(Math.min(365, Number(d) || 30), s || "")); }
+      catch (e) { await adminCard(`📈 Proof report failed: ${esc(e.message)}`); }
+      continue;
+    }
     if (/^\/(buildtests|selftest|acceptall)/.test(txt)) {
       const cmd = txt.match(/^\/(\w+)/)[1];
       await tg("sendMessage", { chat_id: u.message.chat.id, text: cmd === "buildtests" ? "🧪 Collecting real airline mails from Gmail for the test set… (a few minutes)" : cmd === "selftest" ? "🧪 Re-reading every test mail with the current code… (a few minutes)" : "🧪 Updating expected results…" });
@@ -1144,6 +1150,47 @@ async function nightlyReport(force = false) {
   msg += airlineSkips.length ? `\n\n⚠️ <b>Airline-sender mails skipped — please glance:</b>\n` + airlineSkips.slice(0, 15).map((r) => "• " + esc(String(r.subject).slice(0, 80))).join("\n") : "\n\n✅ No airline-sender mail was skipped.";
   for (const a of AGENCIES.filter((x) => x.gmail_refresh_token)) { const h = GMAIL_HEALTH.get(a.id) || {}; msg += `\n\n📬 ${esc(a.name)}: Gmail last read ${h.okAt ? Math.round((Date.now() - h.okAt) / 60000) + " min ago" : "never"}`; }
   await adminCard(msg);
+}
+
+// ---------- proof report: what Aviolink caught for an agency (sales evidence) ----------
+async function proofReport(days = 30, slug = "") {
+  const ag = slug ? AGENCIES.find((a) => a.slug === slug || a.name.toLowerCase().includes(slug.toLowerCase())) : null;
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  let mq = sb.from("mail_log").select("verdict").gte("created_at", since).limit(50000);
+  let aq = sb.from("alerts").select("*").gte("created_at", since).order("created_at", { ascending: false }).limit(5000);
+  if (ag) { mq = mq.eq("agency_id", ag.id); aq = aq.eq("agency_id", ag.id); }
+  const [{ data: ml }, { data: al }] = await Promise.all([mq, aq]);
+  const M = ml || [], A = (al || []).filter((a) => a.status !== "skipped" && a.client_status !== "ignored"); // ignored alerts are not counted as proof
+  const nv = (v) => M.filter((r) => r.verdict === v).length;
+  const istHour = (t) => new Date(new Date(t).getTime() + 5.5 * 3600000).getUTCHours();
+  const firstDep = (a) => {
+    const segs = a.payload?.segments || [];
+    const ts = segs.map((s) => { const v = s.old || s.new || s; return v.date ? Date.parse(`${v.date}T${(v.dep || "00:00")}:00+05:30`) : NaN; }).filter((x) => !isNaN(x));
+    return ts.length ? Math.min(...ts) : NaN;
+  };
+  const urgent = A.filter((a) => { const d = firstDep(a) - new Date(a.created_at).getTime(); return d > 0 && d <= 48 * 3600000; });
+  const night = A.filter((a) => { const h = istHour(a.created_at); return h >= 21 || h < 8; });
+  const cancels = A.filter((a) => (a.change_type || a.payload?.changeType) === "CANCELLATION");
+  const pnrs = new Set(A.map((a) => a.pnr).filter(Boolean));
+  const pax = A.reduce((s, a) => s + ((a.payload?.passengers || []).length), 0);
+  const sent = A.filter((a) => ["sent", "delivered", "read"].includes(a.client_status) || ["sent", "delivered"].includes(a.status));
+  const read = A.filter((a) => a.client_status === "read").length;
+  const byAir = {};
+  for (const a of A) { const k = a.payload?.airline || "?"; byAir[k] = (byAir[k] || 0) + 1; }
+  const topAir = Object.entries(byAir).sort((x, y) => y[1] - x[1]).slice(0, 5).map(([k, v]) => `${esc(airlineName(k) || k)} ${v}`).join(" · ");
+  const ex = urgent.slice(0, 3).map((a) => {
+    const h = Math.round((firstDep(a) - new Date(a.created_at).getTime()) / 3600000);
+    return `• ${esc(a.pnr || "")} · ${esc(airlineName(a.payload?.airline) || a.payload?.airline || "")} · ${(a.change_type || "") === "CANCELLATION" ? "cancelled" : "re-timed"} · caught ${h} h before departure`;
+  }).join("\n");
+  return `📈 <b>AVIOLINK PROOF REPORT</b> · last ${days} days${ag ? " · " + esc(ag.name) : " · all agencies"}\n\n` +
+    `📨 Mails read automatically: <b>${M.length}</b>\n🎫 Tickets saved: ${nv("ticket") + nv("backfill-ticket")}\n\n` +
+    `⚡ <b>Flight changes caught: ${A.length}</b> (${pnrs.size} bookings, ${pax} passengers)\n` +
+    `   ❌ Cancellations: ${cancels.length}\n   🕐 Re-timings / other: ${A.length - cancels.length}\n` +
+    `   🚨 Within 48 h of departure: <b>${urgent.length}</b>\n   🌙 Arrived 9 PM–8 AM: <b>${night.length}</b>\n\n` +
+    `📲 Sent to clients on WhatsApp: ${sent.length}${read ? ` (${read} read)` : ""}\n` +
+    `🔇 Duplicate airline mails silenced: ${nv("dup")}\n⏭ Non-travel mails ignored: ${nv("skip")}\n` +
+    (topAir ? `\n✈️ By airline: ${topAir}` : "") + (ex ? `\n\n<b>Close calls:</b>\n${ex}` : "") +
+    `\n\n<i>Every one of these would otherwise depend on someone noticing one mail among ${M.length}.</i>`;
 }
 
 // ---------- HTTP: OAuth callback + health ----------

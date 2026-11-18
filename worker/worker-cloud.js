@@ -718,7 +718,7 @@ function looksRelevant(email) {
 }
 
 // ---------- welcome mail for dashboard signups, from support@aviolink.in ----------
-// Railway variables: SUPPORT_SMTP_USER=support@aviolink.in, SUPPORT_SMTP_PASS=<Google app password>
+// Sent via Gmail API from support@aviolink.in (connected once at /connect-support)
 let supportMailer = null;
 // support@aviolink.in sends through the Gmail API (HTTPS). Token is stored once via /connect-support.
 let SUPPORT_GMAIL = null; // { email, refresh }
@@ -732,7 +732,9 @@ function getSupportMailer() {
   const MailComposer = require("nodemailer/lib/mail-composer");
   return {
     async sendMail(opts) {
-      const raw = await new MailComposer({ ...opts, from: opts.from || `"Aviolink" <${SUPPORT_GMAIL.email}>` }).compile().build();
+      const node = new MailComposer({ ...opts, from: opts.from || `"Aviolink" <${SUPPORT_GMAIL.email}>` }).compile();
+      node.keepBcc = true; // Gmail API reads recipients from headers
+      const raw = await node.build();
       const tok = await gmail.refreshAccess(SUPPORT_GMAIL.refresh);
       const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 20000);
       try {

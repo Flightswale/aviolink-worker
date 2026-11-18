@@ -23,7 +23,9 @@ module.exports = function makeSelfTest(ctx) {
     }).sort();
     return { kind: p.kind || null, pnr: p.pnr || null, change: p.changeType || null, pax: (p.passengers || []).length, legs };
   }
-  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  // Compare by content, not field order (the database re-orders JSON keys).
+  const canon = (v) => Array.isArray(v) ? v.map(canon) : v && typeof v === "object" ? Object.keys(v).sort().reduce((o, k) => (o[k] = canon(v[k]), o), {}) : v;
+  const same = (a, b) => JSON.stringify(canon(a)) === JSON.stringify(canon(b));
   function diffText(e, g) {
     const out = [];
     for (const k of ["kind", "pnr", "change", "pax"]) if (e[k] !== g[k]) out.push(`${k}: ${e[k]} → ${g[k]}`);

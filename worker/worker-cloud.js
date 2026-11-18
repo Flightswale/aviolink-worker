@@ -125,12 +125,9 @@ function legText(sector, l) {
 }
 const clean = (s, max = 300) => (String(s || "").replace(/[\r\n\t]+/g, " ").replace(/ {4,}/g, "   ").trim().slice(0, max)) || "-";
 function titleName(n) { return String(n || "").toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()).replace(/\s+/g, " ").trim(); }
-function templateFor(p, agency) {
+// Client sees only the legs that actually changed and are not yet flown.
+function clientLegs(p) {
   const segs = p.segments || [];
-  const pax = (p.passengers || []).map(titleName);
-  const who = pax.length ? pax[0] + (pax.length > 1 ? ` +${pax.length - 1}` : "") : "Customer";
-  const cancelled = p.changeType === "CANCELLATION";
-  // Client sees only the legs that actually changed and are not yet flown.
   const nf = (f) => String(f || "").toUpperCase().replace(/\s+/g, "");
   const legChanged = (s) => !s.new || !s.old || s.status === "CANCELLED" || nf(s.old.flight) !== nf(s.new.flight) || s.old.date !== s.new.date || s.old.dep !== s.new.dep || s.old.arr !== s.new.arr;
   const todayIST = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
@@ -138,6 +135,37 @@ function templateFor(p, agency) {
   let show = segs.filter((s) => s.status !== "UNCHANGED" && legChanged(s) && notFlown(s));
   if (!show.length) show = segs.filter((s) => s.status !== "UNCHANGED" && legChanged(s));
   if (!show.length) show = segs;
+  return show;
+}
+function clientName(p) {
+  const pax = (p.passengers || []).map(titleName);
+  return pax.length ? pax[0] + (pax.length > 1 ? ` +${pax.length - 1}` : "") : "Customer";
+}
+// v2 templates: each changed flight on its own lines, "Reply STOP" footer. 1 or 2 flights; more → v1.
+//   flight_change_1leg / flight_change_2leg / flight_cancel_1leg / flight_cancel_2leg
+function legShort(l) {
+  if (!l) return "";
+  const d = l.date && /^\d{4}-\d{2}-\d{2}$/.test(l.date) ? `${Number(l.date.slice(8))} ${MON3[Number(l.date.slice(5, 7)) - 1]}` : (l.date || "");
+  return [l.flight, d, `${l.dep || "--:--"}-${l.arr || "--:--"}${l.arrDayOffset ? " (+" + l.arrDayOffset + ")" : ""}`].filter(Boolean).join(" · ");
+}
+function templateV2For(p, agency) {
+  const legs = clientLegs(p);
+  if (!legs.length || legs.length > 2) return null;
+  const cancelled = p.changeType === "CANCELLATION";
+  const params = [clientName(p), p.pnr, airlineName(p.airline || "")];
+  for (const s of legs) {
+    params.push(String(s.sector || "").replace(/\s*(→|->|-)\s*/, " → "));
+    params.push(legShort(s.old) || "As per your ticket");
+    params.push(cancelled ? (legShort(s.new) || "Not offered by the airline - full refund applicable") : (legShort(s.new) || "Please contact us"));
+  }
+  params.push(agency?.name, agency?.owner_phone || agency?.whatsapp);
+  return { name: `${cancelled ? "flight_cancel" : "flight_change"}_${legs.length}leg`, params: params.map((x) => clean(x)) };
+}
+function templateFor(p, agency) {
+  const pax = (p.passengers || []).map(titleName);
+  const who = clientName(p);
+  const cancelled = p.changeType === "CANCELLATION";
+  const show = clientLegs(p);
   const oldTxt = show.filter((s) => s.old).map((s) => legText(s.sector, s.old)).join(" | ");
   const newTxt = show.filter((s) => s.new).map((s) => legText(s.sector, s.new)).join(" | ");
   const params = [who, p.pnr, airlineName(p.airline || ""), cancelled ? oldTxt : (oldTxt || "As per your ticket"), cancelled ? (newTxt || "Not offered by the airline - full refund applicable") : newTxt,
@@ -159,9 +187,17 @@ async function sendWhatsAppTemplate(toMobile, name, params) {
     return { ok: true, id: data.messages?.[0]?.id };
   } catch (e) { return { ok: false, err: e.message }; }
 }
+let V2_OFF_UNTIL = 0;
 // One entry point: template when enabled (works any time), plain text as fallback (works inside a 24 h window).
 async function deliverClientWhatsApp(target, payload, agency, text) {
   if (process.env.WA_USE_TEMPLATES === "1" && payload && payload.pnr) {
+    const v2 = Date.now() > V2_OFF_UNTIL ? templateV2For(payload, agency) : null;
+    if (v2) {
+      const r = await sendWhatsAppTemplate(target, v2.name, v2.params);
+      if (r.ok) return { ...r, via: `template ${v2.name}` };
+      if (/^13200[01]|^132012/.test(r.err)) V2_OFF_UNTIL = Date.now() + 3600000; // not approved yet → use v1 for an hour
+      console.error("[wa-template v2]", r.err);
+    }
     const t = templateFor(payload, agency);
     const r = await sendWhatsAppTemplate(target, t.name, t.params);
     if (r.ok) return { ...r, via: `template ${t.name}` };
@@ -192,6 +228,8 @@ async function sendAlertToClient(alertId, { mobile = null, actor = "telegram", f
     else if (fallbackOwner && (ag?.whatsapp || ag?.owner_phone)) { target = ag.whatsapp || ag.owner_phone; who = "agency owner"; }
   }
   if (!target) return { ok: false, err: "No client mobile on file — enter it" };
+  const { data: opt } = await sb.from("wa_optout").select("phone").eq("phone", normMobile(target)).maybeSingle().then((x) => x, () => ({}));
+  if (opt) return { ok: false, err: "This client replied STOP — alerts to this number are switched off" };
   const r = await deliverClientWhatsApp(target, p, ag, al.compiled_whatsapp);
   const now = new Date().toISOString();
   if (r.ok) {
@@ -1091,6 +1129,18 @@ async function handleWaWebhook(payload) {
     for (const m of v.messages || []) {
       const name = (v.contacts || [])[0]?.profile?.name || "";
       const text = m.text?.body || m.button?.text || m.interactive?.button_reply?.title || `[${m.type}]`;
+      if (/^\s*(stop|stop alerts?|unsubscribe|band|बंद|बंद करा|cancel alerts?)\s*[.!]?\s*$/i.test(text)) {
+        const r = await sb.from("wa_optout").upsert({ phone: String(m.from), created_at: new Date().toISOString() }, { onConflict: "phone" });
+        await sendWhatsApp(m.from, "You will no longer receive flight alerts from Aviolink on this number. Reply START to turn them back on.");
+        await adminCard(`🛑 <b>CLIENT OPTED OUT</b> +${esc(m.from)}${name ? " (" + esc(name) + ")" : ""} replied STOP — no more alerts to this number.${r.error ? "\n⚠️ Not saved: " + esc(r.error.message) : ""}`);
+        continue;
+      }
+      if (/^\s*(start|resume)\s*[.!]?\s*$/i.test(text)) {
+        await sb.from("wa_optout").delete().eq("phone", String(m.from));
+        await sendWhatsApp(m.from, "Flight alerts from Aviolink are on again for this number.");
+        await adminCard(`✅ Client +${esc(m.from)} replied START — alerts on again.`);
+        continue;
+      }
       await adminCard(`💬 <b>CLIENT REPLY</b> from +${esc(m.from)}${name ? " (" + esc(name) + ")" : ""}\n${esc(String(text).slice(0, 500))}`);
     }
   }
@@ -1131,6 +1181,25 @@ async function watchdog() {
   }
 }
 let lastReportDay = "";
+// WhatsApp health: warn the moment quality / limit / status / name changes
+let WA_HEALTH = null, waHealthAt = 0;
+async function waQualityWatch(force = false) {
+  if (!WA.enabled() || (!force && Date.now() - waHealthAt < 3 * 3600000)) return;
+  waHealthAt = Date.now();
+  try {
+    const r = await fetch(`https://graph.facebook.com/v20.0/${WA.phoneId}?fields=quality_rating,messaging_limit_tier,status,name_status`, { headers: { authorization: `Bearer ${WA.token}` } });
+    const h = await r.json();
+    if (!r.ok) return;
+    const prev = WA_HEALTH; WA_HEALTH = h;
+    const bad = h.quality_rating && h.quality_rating !== "GREEN";
+    const changed = prev && ["quality_rating", "messaging_limit_tier", "status", "name_status"].some((k) => prev[k] !== h[k]);
+    if (bad || changed || force) {
+      await adminCard(`${bad ? "⚠️ <b>WHATSAPP QUALITY " + esc(h.quality_rating) + "</b>\nClients are blocking or reporting our number. Check recent alerts for wrong or repeated messages before sending more." : "📱 <b>WhatsApp number status</b>"}\nQuality: ${esc(h.quality_rating)} · Limit: ${esc(h.messaging_limit_tier)} · Status: ${esc(h.status)} · Name: ${esc(h.name_status)}` +
+        (changed ? `\n(was: ${esc(prev.quality_rating)} · ${esc(prev.messaging_limit_tier)} · ${esc(prev.status)} · ${esc(prev.name_status)})` : ""));
+    }
+  } catch (e) { console.error("[wa-health]", e.message); }
+}
+
 async function nightlyReport(force = false) {
   const ist = new Date(Date.now() + 5.5 * 3600000);
   const day = ist.toISOString().slice(0, 10);
@@ -1306,7 +1375,7 @@ Reason: ${esc(why)}`);
   };
   const tgLoop = async () => { try { await pollTelegram(); } catch (e) { console.error("[tg-error]", e.message); } setTimeout(tgLoop, 3000); };
   const agLoop = async () => { try { await loadAgencies(); await sendWelcomes(); } catch (_) {} setTimeout(agLoop, 120000); };
-  const wdLoop = async () => { try { await watchdog(); await nightlyReport(); } catch (e) { console.error("[watchdog]", e.message); } setTimeout(wdLoop, 60000); };
+  const wdLoop = async () => { try { await watchdog(); await nightlyReport(); await waQualityWatch(); } catch (e) { console.error("[watchdog]", e.message); } setTimeout(wdLoop, 60000); };
   setTimeout(wdLoop, 60000);
   const bfLoop = async () => { if (gmail.enabled()) { try { await runBackfills(); } catch (e) { console.error("[backfill-loop]", e.message); } } setTimeout(bfLoop, 60000); };
   sendWelcomes().catch(()=>{});

@@ -60,7 +60,7 @@ module.exports = function makeSelfTest(ctx) {
         const raw = await gmail.getRaw(access.get(a.id), r.mid.slice(3));
         const parsed = await readMail(raw);
         if (parsed.source === "ai-error") continue;
-        await sb.from("test_mails").upsert({ agency_id: r.agency_id, message_id: r.mid, subject: r.subject, raw: raw.slice(0, 600000), expected: essence(parsed) }, { onConflict: "message_id" });
+        await sb.from("test_mails").upsert({ agency_id: r.agency_id, message_id: r.mid, subject: r.subject, raw, expected: essence(parsed) }, { onConflict: "message_id" });
         saved++;
       } catch (e) { console.error("[buildtests]", r.subject, e.message); }
     }
@@ -70,8 +70,20 @@ module.exports = function makeSelfTest(ctx) {
   }
 
   async function run(reason) {
-    const { data: tests, error } = await sb.from("test_mails").select("message_id,subject,raw,expected");
+    const { data: tests, error } = await sb.from("test_mails").select("id,agency_id,message_id,subject,raw,expected");
     if (error || !tests || !tests.length) return null;
+    // Mails stored cut at 600 KB by the first version: fetch the full mail from Gmail again.
+    const access = new Map();
+    for (const t of tests) {
+      if ((t.raw || "").length < 600000) continue;
+      try {
+        const a = getAgencies().find((x) => x.id === t.agency_id);
+        if (!a || !a.gmail_refresh_token) continue;
+        if (!access.has(a.id)) access.set(a.id, await gmailAccess(a));
+        t.raw = await gmail.getRaw(access.get(a.id), t.message_id.slice(3));
+        await sb.from("test_mails").update({ raw: t.raw }).eq("id", t.id);
+      } catch (e) { console.error("[selftest] refetch", t.subject, e.message); }
+    }
     const bad = []; let aiDown = 0;
     for (const t of tests) {
       try {

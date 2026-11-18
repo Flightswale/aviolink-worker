@@ -720,14 +720,32 @@ function looksRelevant(email) {
 // ---------- welcome mail for dashboard signups, from support@aviolink.in ----------
 // Railway variables: SUPPORT_SMTP_USER=support@aviolink.in, SUPPORT_SMTP_PASS=<Google app password>
 let supportMailer = null;
+// support@aviolink.in sends through the Gmail API (HTTPS). Token is stored once via /connect-support.
+let SUPPORT_GMAIL = null; // { email, refresh }
+async function loadSupportGmail() {
+  const { data } = await sb.from("app_settings").select("key,value").in("key", ["support_gmail_email", "support_gmail_refresh"]).then((x) => x, () => ({}));
+  const m = Object.fromEntries((data || []).map((x) => [x.key, x.value]));
+  SUPPORT_GMAIL = m.support_gmail_refresh ? { email: m.support_gmail_email, refresh: m.support_gmail_refresh } : null;
+}
 function getSupportMailer() {
-  if (!process.env.SUPPORT_SMTP_USER || !process.env.SUPPORT_SMTP_PASS) return null;
-  if (!supportMailer) supportMailer = nodemailer.createTransport({ host: "smtp.gmail.com", port: 465, secure: true, auth: { user: process.env.SUPPORT_SMTP_USER, pass: process.env.SUPPORT_SMTP_PASS } });
-  return supportMailer;
+  if (!SUPPORT_GMAIL) return null;
+  const MailComposer = require("nodemailer/lib/mail-composer");
+  return {
+    async sendMail(opts) {
+      const raw = await new MailComposer({ ...opts, from: opts.from || `"Aviolink" <${SUPPORT_GMAIL.email}>` }).compile().build();
+      const tok = await gmail.refreshAccess(SUPPORT_GMAIL.refresh);
+      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 20000);
+      try {
+        const r = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", { method: "POST", signal: ctl.signal,
+          headers: { authorization: `Bearer ${tok.access_token}`, "content-type": "application/json" }, body: JSON.stringify({ raw: Buffer.from(raw).toString("base64url") }) });
+        if (!r.ok) throw new Error(`gmail send ${r.status}: ${(await r.text()).slice(0, 200)}`);
+      } finally { clearTimeout(t); }
+    },
+  };
 }
 async function sendSignupWelcome(a, toEmail) {
   const m = getSupportMailer();
-  if (!m) { console.log("[welcome] SUPPORT_SMTP_* not set — skipped"); return false; }
+  if (!m) { console.log("[welcome] support mailbox not connected — skipped"); return false; }
   const name = a.contact_name || a.name;
   const end = a.trial_ends_at ? new Date(a.trial_ends_at).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" }) : "";
   const html = `<div style="font-family:Arial,sans-serif;max-width:560px;color:#141B4D;line-height:1.55">
@@ -744,7 +762,7 @@ async function sendSignupWelcome(a, toEmail) {
 <p>Questions? Just reply to this mail, or WhatsApp us at +91 92705 46474.</p>
 <p>Team Aviolink<br><a href="https://aviolink.in">aviolink.in</a></p>
 <p style="color:#6B7280;font-size:12px">Aviolink is a brand of Finch Travels, Pune.</p></div>`;
-  await m.sendMail({ from: `"Aviolink" <${process.env.SUPPORT_SMTP_USER}>`, replyTo: process.env.SUPPORT_SMTP_USER, to: toEmail, bcc: process.env.SUPPORT_SMTP_USER,
+  await m.sendMail({ from: `"Aviolink" <${SUPPORT_GMAIL.email}>`, replyTo: SUPPORT_GMAIL.email, to: toEmail, bcc: SUPPORT_GMAIL.email,
     subject: `Welcome to Aviolink — your 30-day trial is active`, html });
   return true;
 }
@@ -1387,7 +1405,7 @@ async function trialReminders() {
       const end = new Date(a.trial_ends_at).toLocaleDateString("en-IN", { day: "numeric", month: "long" });
       const subj = step === "ended" ? "Your Aviolink trial has ended" : `Your Aviolink trial ends ${left === 1 ? "tomorrow" : "on " + end}`;
       const lead = step === "ended" ? "Your free trial has ended, so new flight-change alerts are paused." : `Your free trial ends ${left === 1 ? "tomorrow" : "on <b>" + end + "</b>"}.`;
-      await m.sendMail({ from: `"Aviolink" <${process.env.SUPPORT_SMTP_USER}>`, to: a.notify_email, bcc: process.env.SUPPORT_SMTP_USER, subject: subj,
+      await m.sendMail({ from: `"Aviolink" <${SUPPORT_GMAIL.email}>`, to: a.notify_email, bcc: SUPPORT_GMAIL.email, subject: subj,
         html: `<div style="font-family:Arial,sans-serif;max-width:560px;color:#141B4D;line-height:1.55"><p>Hi ${esc(a.contact_name || a.name)},</p><p>${lead}</p><p>So far Aviolink has caught <b>${count || 0} flight change${count === 1 ? "" : "s"}</b> for ${esc(a.name)}.</p><p>To ${step === "ended" ? "switch alerts back on" : "keep receiving alerts without a break"}, click <b>Subscribe</b> in your dashboard (UPI AutoPay or card, renews monthly), or reply to this mail / WhatsApp us at <b>+91 92705 46474</b>.</p><p style="margin:22px 0"><a href="https://app.aviolink.in" style="background:#1E2761;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold">Open your dashboard</a></p><p>Team Aviolink · <a href="https://aviolink.in">aviolink.in</a></p></div>` }).catch((e) => console.error("[trial-mail]", e.message));
     }
     await sb.from("agencies").update({ trial_reminder: step }).eq("id", a.id);
@@ -1469,6 +1487,9 @@ function startHttp() {
         if (!a) return page("Unknown agency", `No agency called “${esc(cm[1])}”. Pick one:<br><br>${AGENCIES.map((x) => `<a href="/connect/${x.slug}">${esc(x.name)}</a>${x.gmail_email ? " ✅ " + esc(x.gmail_email) : ""}`).join("<br>")}`);
         res.writeHead(302, { location: gmail.authUrl(a.id) }); return res.end();
       }
+      if (u.pathname === "/connect-support") {
+        res.writeHead(302, { location: gmail.sendAuthUrl(gmail.signState("support"), "support@aviolink.in") }); return res.end();
+      }
       if (u.pathname === "/auth/google") {
         const agencyId = u.searchParams.get("agency") || "";
         if (!gmail.enabled()) { res.writeHead(503); return res.end("Google sign-in not configured"); }
@@ -1487,6 +1508,13 @@ Reason: ${esc(why)}`);
         }
         const tok = await gmail.exchangeCode(code);
         if (!tok.refresh_token) return page("Not connected", "Google did not give offline access. Please open the link again and click Allow.");
+        if (agencyId === "support") {
+          let email = ""; try { email = JSON.parse(Buffer.from(String(tok.id_token).split(".")[1], "base64url").toString()).email || ""; } catch (_) {}
+          await sb.from("app_settings").upsert([{ key: "support_gmail_email", value: email }, { key: "support_gmail_refresh", value: tok.refresh_token }], { onConflict: "key" });
+          await loadSupportGmail();
+          await adminCard(`✉️ <b>SUPPORT MAILBOX CONNECTED</b> — ${esc(email)}\nWelcome and trial mails will go out from it.`);
+          return page("✅ Support mailbox connected", `<b>${esc(email)}</b> will now send Aviolink's welcome and reminder mails. You can close this page.`);
+        }
         const prof = await gmail.profile(tok.access_token);
         const { error } = await sb.from("agencies").update({
           gmail_email: prof.emailAddress, gmail_refresh_token: tok.refresh_token,
@@ -1513,6 +1541,7 @@ Reason: ${esc(why)}`);
   await require("./migrate")().catch((e) => adminCard(`⚠️ Database update failed: ${esc(e.message)}`).catch(() => {}));
   await loadAgencies();
   requeueUnparsed().catch((e) => console.error("[requeue]", e.message));
+  loadSupportGmail().catch(() => {});
   setTimeout(selfTestAfterUpdate, 10 * 60000); // every deploy restarts the worker → test the new code on real mails
   try {
     const { data: stuck } = await sb.from("agencies").update({ gmail_backfill_status: "pending" }).eq("gmail_backfill_status", "running").select("id");

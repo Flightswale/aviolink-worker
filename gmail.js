@@ -35,6 +35,12 @@ function authUrl(agencyId) {
   return `https://accounts.google.com/o/oauth2/v2/auth?${q}`;
 }
 
+// Send-only access for the support mailbox (welcome / trial mails go out via Gmail API — SMTP is blocked on the host)
+function sendAuthUrl(state, hint) {
+  const q = new URLSearchParams({ client_id: CID, redirect_uri: REDIRECT, response_type: "code", scope: "https://www.googleapis.com/auth/gmail.send openid email",
+    access_type: "offline", prompt: "consent", state, ...(hint ? { login_hint: hint } : {}) });
+  return `https://accounts.google.com/o/oauth2/v2/auth?${q}`;
+}
 // Dashboard login: identity only (email), no mailbox access.
 function loginUrl(state) {
   const q = new URLSearchParams({ client_id: CID, redirect_uri: REDIRECT, response_type: "code", scope: "openid email", prompt: "select_account", state });
@@ -82,4 +88,4 @@ async function getRaw(access, id) {
   return Buffer.from(String(m.raw || "").replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
 }
 
-module.exports = { loginUrl, enabled, authUrl, verifyState, exchangeCode, refreshAccess, profile, listIds, getRaw, getMeta, PUBLIC_URL };
+module.exports = { sendAuthUrl, signState, loginUrl, enabled, authUrl, verifyState, exchangeCode, refreshAccess, profile, listIds, getRaw, getMeta, PUBLIC_URL };

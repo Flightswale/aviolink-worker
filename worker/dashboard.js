@@ -155,8 +155,11 @@ module.exports = function makeDashboard(ctx) {
       if (ins.error) return json(res, 500, { error: ins.error.message }), true;
       await loadAgencies();
       setSession(res, host, { email: sess.email, admin: false, agencyId: ins.data.id, actAs: null, exp: Date.now() + 30 * DAY });
-      const welcomed = ctx.sendSignupWelcome ? await ctx.sendSignupWelcome({ ...row, id: ins.data.id }, sess.email).catch((e) => { console.error("[welcome]", e.message); return false; }) : false;
+      // Reply first; welcome mail + Telegram note in the background (never block signup on email)
+      (async () => {
+        const welcomed = ctx.sendSignupWelcome ? await ctx.sendSignupWelcome({ ...row, id: ins.data.id }, sess.email).catch((e) => { console.error("[welcome]", e.message); return false; }) : false;
       await adminCard(`🆕 <b>NEW AGENCY SIGNUP</b>\n🏢 ${esc(name)}${contact ? " · " + esc(contact) : ""}\n📧 ${esc(sess.email)} · 📞 ${esc(phone)}${gstin ? "\n🧾 GSTIN " + esc(gstin) + " · " + esc(legal) : "\n🧾 No GSTIN given"}\n30-day trial started — next step for them: connect Gmail.\n${welcomed ? "✉️ Welcome mail sent from support@aviolink.in" : "✉️ Welcome mail NOT sent (support mail not set up)"}`).catch(() => {});
+      })();
       return json(res, 200, { ok: true }), true;
     }
 

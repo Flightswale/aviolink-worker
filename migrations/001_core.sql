@@ -26,3 +26,5 @@ alter table agencies add column if not exists rzp_subscription_id text;
 alter table agencies add column if not exists gstin text;
 alter table agencies add column if not exists legal_name text;
 alter table agencies add column if not exists billing_address text;
+create table if not exists app_settings (key text primary key, value text, updated_at timestamptz default now());
+alter table app_settings enable row level security;

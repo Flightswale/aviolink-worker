@@ -956,7 +956,7 @@ async function aiPickTravel(lines) {
     const headers = { "content-type": "application/json", "x-api-key": CFG.anthropicKey, "anthropic-version": "2023-06-01" };
     if (process.env.ANTHROPIC_WORKSPACE_ID) headers["anthropic-workspace-id"] = process.env.ANTHROPIC_WORKSPACE_ID;
     const res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: JSON.stringify({
-      model: process.env.ANTHROPIC_CLASSIFY_MODEL || "claude-haiku-4-5-20251001", max_tokens: 300,
+      model: process.env.ANTHROPIC_CLASSIFY_MODEL || "claude-haiku-4-5-20251001", max_tokens: 300, temperature: 0,
       system: "Each numbered line is 'sender | subject' of an email received by a travel agency. Return ONLY a JSON array of the line numbers that are from an airline, GDS, consolidator, OTA or booking vendor AND concern a specific flight booking: e-ticket, booking/trip summary, itinerary, reservation, or a schedule change/delay/cancellation. Any language. Exclude marketing, OTPs, invoices, statements, check-in reminders. Example: [0,7,12]",
       messages: [{ role: "user", content: lines.map((l, i) => `${i}. ${l}`).join("\n") }] }) });
     if (!res.ok) { console.error("[ai-pick] HTTP", res.status); return []; }
@@ -1097,7 +1097,7 @@ async function aiSaysTravel(email) {
     const headers = { "content-type": "application/json", "x-api-key": CFG.anthropicKey, "anthropic-version": "2023-06-01" };
     if (process.env.ANTHROPIC_WORKSPACE_ID) headers["anthropic-workspace-id"] = process.env.ANTHROPIC_WORKSPACE_ID;
     const res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: JSON.stringify({
-      model: process.env.ANTHROPIC_CLASSIFY_MODEL || "claude-haiku-4-5-20251001", max_tokens: 5,
+      model: process.env.ANTHROPIC_CLASSIFY_MODEL || "claude-haiku-4-5-20251001", max_tokens: 5, temperature: 0,
       system: "You classify emails received by a travel agency. Answer YES if the email is from an airline, GDS, travel consolidator, OTA or booking vendor AND is about a specific flight booking: an e-ticket / booking confirmation / itinerary, or a schedule change, time change, delay, cancellation, rebooking or re-accommodation of a flight. Answer NO for marketing, newsletters, OTPs, check-in reminders, boarding passes, invoices, payment receipts, refunds the agency requested, and anything not about a specific flight. Any language. Answer exactly YES or NO.",
       messages: [{ role: "user", content: `FROM: ${email.from}\nSUBJECT: ${email.subject}\n\n${(email.body || "").slice(0, 3000)}` }] }) });
     if (!res.ok) { const b = await res.text().catch(() => ""); throw new AiDown(`HTTP ${res.status}: ${b.slice(0, 200)}`); }

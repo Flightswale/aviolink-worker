@@ -1379,6 +1379,7 @@ Reason: ${esc(why)}`);
 
 // ---------- main ----------
 (async () => {
+  await require("./migrate")().catch((e) => adminCard(`⚠️ Database update failed: ${esc(e.message)}`).catch(() => {}));
   await loadAgencies();
   requeueUnparsed().catch((e) => console.error("[requeue]", e.message));
   setTimeout(selfTestAfterUpdate, 10 * 60000); // every deploy restarts the worker → test the new code on real mails

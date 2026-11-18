@@ -1,0 +1,21 @@
+-- Runs automatically at startup when SUPABASE_DB_URL is set. Every statement is safe to repeat.
+alter table agencies add column if not exists gmail_email text;
+alter table agencies add column if not exists gmail_refresh_token text;
+alter table agencies add column if not exists gmail_connected_at timestamptz;
+alter table agencies add column if not exists gmail_backfill_status text;
+alter table agencies add column if not exists gmail_error text;
+alter table agencies add column if not exists status text default 'active';
+alter table agencies add column if not exists auto_send boolean default false;
+alter table agencies add column if not exists login_emails text[] default '{}';
+alter table alerts add column if not exists client_status text;
+alter table alerts add column if not exists client_mobile text;
+alter table alerts add column if not exists wa_message_id text;
+alter table alerts add column if not exists wa_error text;
+alter table alerts add column if not exists sent_by text;
+create index if not exists alerts_wa_message_id_idx on alerts (wa_message_id);
+create index if not exists alerts_agency_created_idx on alerts (agency_id, created_at desc);
+create index if not exists mail_log_agency_created_idx on mail_log (agency_id, created_at desc);
+create table if not exists test_mails (id bigserial primary key, agency_id text, message_id text unique, subject text, raw text, expected jsonb, created_at timestamptz default now());
+alter table test_mails enable row level security;
+create table if not exists wa_optout (phone text primary key, created_at timestamptz default now());
+alter table wa_optout enable row level security;

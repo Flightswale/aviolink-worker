@@ -832,6 +832,23 @@ async function selfTestAfterUpdate() {
   } catch (e) { console.error("[selftest]", e.message); }
 }
 
+// ---------- Gmail forwarding confirmation: confirm automatically, and show the code to the agent ----------
+async function handleForwardingConfirmation(agency, email, subject) {
+  const text = `${subject}\n${email.body || ""}`;
+  const code = (text.match(/\(#(\d{6,12})\)/) || text.match(/Confirmation code:\s*(\d{6,12})/i) || [])[1] || null;
+  const link = (text.match(/https:\/\/mail(?:-settings)?\.google\.com\/mail\/[^\s"'<>)]+/) || [])[0] || null;
+  let auto = false;
+  if (link) {
+    try { // the link confirms the forwarding request (some versions need a POST of the same URL)
+      let r = await fetch(link, { redirect: "follow" }); let body = await r.text();
+      if (!/success|confirmed|has been approved|can now forward/i.test(body)) { r = await fetch(link, { method: "POST", redirect: "follow" }); body = await r.text(); }
+      auto = /success|confirmed|has been approved|can now forward/i.test(body);
+    } catch (e) { console.error("[fwd-confirm] link", e.message); }
+  }
+  await sb.from("agencies").update({ fwd_code: code, ...(auto ? { fwd_confirmed_at: new Date().toISOString() } : {}) }).eq("id", agency.id).then(() => {}, () => {});
+  await adminCard(`📨 <b>FORWARDING SET-UP</b> · 🏢 ${esc(agency.name)}\n${auto ? "✅ Gmail forwarding confirmed automatically." : `Confirmation code: <b>${esc(code || "not found")}</b> — shown in their dashboard.`}`);
+}
+
 // ---------- AI outage: never lose a mail ----------
 // If the AI reader errors (bad key, no credit, overload, network), the mail is NOT logged,
 // so the next poll reads it again. Telegram is told once, and again when AI is back.
@@ -886,6 +903,15 @@ async function processRawInner(raw, mid, subject, forcedAgency = null, opts = {}
     }
     const agency = forcedAgency || resolveAgency(rawHead, email) || DEFAULT_AGENCY;
     console.log(`[mail] (${agency?.slug}) ${subject}`);
+    // Mail arriving through an agency's forwarding address: note it, and handle Gmail's forwarding confirmation
+    if (!forcedAgency && agency && agency.alerts_email && rawHead.toLowerCase().includes(String(agency.alerts_email).toLowerCase())) {
+      sb.from("agencies").update({ fwd_last_at: new Date().toISOString() }).eq("id", agency.id).then(() => {}, () => {});
+      if (/forwarding-noreply@google\.com/i.test(email.from || rawHead) || /Forwarding Confirmation/i.test(subject)) {
+        await handleForwardingConfirmation(agency, email, subject).catch((e) => console.error("[fwd-confirm]", e.message));
+        await logMail(agency.id, mid, subject, "info", "gmail forwarding confirmation");
+        return true;
+      }
+    }
     const gh = GMAIL_HEALTH.get(agency.id);
     if (!forcedAgency && agency.gmail_refresh_token && gmail.enabled() && gh && gh.okAt && Date.now() - gh.okAt < 600000) {
       // This agency's Gmail is read directly — a forwarded copy would only create duplicates.

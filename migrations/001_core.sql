@@ -28,3 +28,6 @@ alter table agencies add column if not exists legal_name text;
 alter table agencies add column if not exists billing_address text;
 create table if not exists app_settings (key text primary key, value text, updated_at timestamptz default now());
 alter table app_settings enable row level security;
+alter table agencies add column if not exists fwd_code text;
+alter table agencies add column if not exists fwd_confirmed_at timestamptz;
+alter table agencies add column if not exists fwd_last_at timestamptz;

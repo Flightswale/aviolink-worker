@@ -63,6 +63,7 @@ module.exports = function makeDashboard(ctx) {
       id: a.id, name: a.name, slug: a.slug, plan: a.plan, trial_ends_at: a.trial_ends_at, status: a.status || "active",
       paid_until: a.paid_until || null, billingReady: Boolean(ctx.billing && ctx.billing.enabled()), price: ctx.billing ? ctx.billing.price : null,
       owner_phone: a.owner_phone, whatsapp: a.whatsapp, notify_email: a.notify_email, alerts_email: a.alerts_email,
+      fwd: { address: a.alerts_email || null, code: a.fwd_code || null, confirmed_at: a.fwd_confirmed_at || null, last_at: a.fwd_last_at || null },
       gstin: a.gstin || "", legal_name: a.legal_name || "", billing_address: a.billing_address || "", contact_name: a.contact_name || "",
       auto_send: Boolean(a.auto_send), wa_notify: a.agent_wa_notify ?? (a.id !== (ctx.defaultAgencyId && ctx.defaultAgencyId())), login_emails: a.login_emails || [], autoSendReady: a.auto_send !== undefined,
       gmail: { email: a.gmail_email || null, connected_at: a.gmail_connected_at || null, backfill: a.gmail_backfill_status || null,

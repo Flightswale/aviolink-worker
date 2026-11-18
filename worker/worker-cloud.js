@@ -1156,7 +1156,15 @@ async function nightlyReport(force = false) {
 async function proofReport(days = 30, slug = "") {
   const ag = slug ? AGENCIES.find((a) => a.slug === slug || a.name.toLowerCase().includes(slug.toLowerCase())) : null;
   const since = new Date(Date.now() - days * 86400000).toISOString();
-  let mq = sb.from("mail_log").select("verdict").gte("created_at", since).limit(50000);
+  // exact counts (a plain select is capped at 1000 rows)
+  const cnt = async (verdicts) => {
+    let q = sb.from("mail_log").select("id", { count: "exact", head: true }).gte("created_at", since);
+    if (verdicts) q = q.in("verdict", verdicts);
+    if (ag) q = q.eq("agency_id", ag.id);
+    const { count } = await q; return count || 0;
+  };
+  const [cAll, cTicket, cDup, cSkip] = await Promise.all([cnt(null), cnt(["ticket", "backfill-ticket"]), cnt(["dup"]), cnt(["skip"])]);
+  let mq = sb.from("mail_log").select("verdict").gte("created_at", since).limit(1);
   let aq = sb.from("alerts").select("*").gte("created_at", since).order("created_at", { ascending: false }).limit(5000);
   if (ag) { mq = mq.eq("agency_id", ag.id); aq = aq.eq("agency_id", ag.id); }
   const [{ data: ml }, { data: al }] = await Promise.all([mq, aq]);
@@ -1172,7 +1180,9 @@ async function proofReport(days = 30, slug = "") {
   const night = A.filter((a) => { const h = istHour(a.created_at); return h >= 21 || h < 8; });
   const cancels = A.filter((a) => (a.change_type || a.payload?.changeType) === "CANCELLATION");
   const pnrs = new Set(A.map((a) => a.pnr).filter(Boolean));
-  const pax = A.reduce((s, a) => s + ((a.payload?.passengers || []).length), 0);
+  const paxBy = new Map(); // each passenger once per booking, however often it changed
+  for (const a of A) if (a.pnr) paxBy.set(a.pnr, Math.max(paxBy.get(a.pnr) || 0, (a.payload?.passengers || []).length));
+  const pax = [...paxBy.values()].reduce((s, n) => s + n, 0);
   const sent = A.filter((a) => ["sent", "delivered", "read"].includes(a.client_status) || ["sent", "delivered"].includes(a.status));
   const read = A.filter((a) => a.client_status === "read").length;
   const byAir = {};
@@ -1190,7 +1200,7 @@ async function proofReport(days = 30, slug = "") {
     `📲 Sent to clients on WhatsApp: ${sent.length}${read ? ` (${read} read)` : ""}\n` +
     `🔇 Duplicate airline mails silenced: ${nv("dup")}\n⏭ Non-travel mails ignored: ${nv("skip")}\n` +
     (topAir ? `\n✈️ By airline: ${topAir}` : "") + (ex ? `\n\n<b>Close calls:</b>\n${ex}` : "") +
-    `\n\n<i>Every one of these would otherwise depend on someone noticing one mail among ${M.length}.</i>`;
+    `\n\n<i>Every one of these would otherwise depend on someone noticing one mail among ${cAll}.</i>`;
 }
 
 // ---------- HTTP: OAuth callback + health ----------

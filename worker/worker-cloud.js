@@ -1193,12 +1193,12 @@ async function proofReport(days = 30, slug = "") {
     return `• ${esc(a.pnr || "")} · ${esc(airlineName(a.payload?.airline) || a.payload?.airline || "")} · ${(a.change_type || "") === "CANCELLATION" ? "cancelled" : "re-timed"} · caught ${h} h before departure`;
   }).join("\n");
   return `📈 <b>AVIOLINK PROOF REPORT</b> · last ${days} days${ag ? " · " + esc(ag.name) : " · all agencies"}\n\n` +
-    `📨 Mails read automatically: <b>${M.length}</b>\n🎫 Tickets saved: ${nv("ticket") + nv("backfill-ticket")}\n\n` +
+    `📨 Mails read automatically: <b>${cAll}</b>\n🎫 Tickets saved: ${cTicket}\n\n` +
     `⚡ <b>Flight changes caught: ${A.length}</b> (${pnrs.size} bookings, ${pax} passengers)\n` +
     `   ❌ Cancellations: ${cancels.length}\n   🕐 Re-timings / other: ${A.length - cancels.length}\n` +
     `   🚨 Within 48 h of departure: <b>${urgent.length}</b>\n   🌙 Arrived 9 PM–8 AM: <b>${night.length}</b>\n\n` +
     `📲 Sent to clients on WhatsApp: ${sent.length}${read ? ` (${read} read)` : ""}\n` +
-    `🔇 Duplicate airline mails silenced: ${nv("dup")}\n⏭ Non-travel mails ignored: ${nv("skip")}\n` +
+    `🔇 Duplicate airline mails silenced: ${cDup}\n⏭ Non-travel mails ignored: ${cSkip}\n` +
     (topAir ? `\n✈️ By airline: ${topAir}` : "") + (ex ? `\n\n<b>Close calls:</b>\n${ex}` : "") +
     `\n\n<i>Every one of these would otherwise depend on someone noticing one mail among ${cAll}.</i>`;
 }

@@ -140,7 +140,8 @@ module.exports = function makeDashboard(ctx) {
       if (ins.error) return json(res, 500, { error: ins.error.message }), true;
       await loadAgencies();
       setSession(res, host, { email: sess.email, admin: false, agencyId: ins.data.id, actAs: null, exp: Date.now() + 30 * DAY });
-      await adminCard(`🆕 <b>NEW AGENCY SIGNUP</b>\n🏢 ${esc(name)}${contact ? " · " + esc(contact) : ""}\n📧 ${esc(sess.email)} · 📞 ${esc(phone)}\n30-day trial started — next step for them: connect Gmail.`).catch(() => {});
+      const welcomed = ctx.sendSignupWelcome ? await ctx.sendSignupWelcome({ ...row, id: ins.data.id }, sess.email).catch((e) => { console.error("[welcome]", e.message); return false; }) : false;
+      await adminCard(`🆕 <b>NEW AGENCY SIGNUP</b>\n🏢 ${esc(name)}${contact ? " · " + esc(contact) : ""}\n📧 ${esc(sess.email)} · 📞 ${esc(phone)}\n30-day trial started — next step for them: connect Gmail.\n${welcomed ? "✉️ Welcome mail sent from support@aviolink.in" : "✉️ Welcome mail NOT sent (support mail not set up)"}`).catch(() => {});
       return json(res, 200, { ok: true }), true;
     }
 

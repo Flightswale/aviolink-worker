@@ -715,6 +715,38 @@ function looksRelevant(email) {
          AIRLINE_HINTS.test(email.body.slice(0,2000)) || SUBJECT_HINTS.test(email.subject||"");
 }
 
+// ---------- welcome mail for dashboard signups, from support@aviolink.in ----------
+// Railway variables: SUPPORT_SMTP_USER=support@aviolink.in, SUPPORT_SMTP_PASS=<Google app password>
+let supportMailer = null;
+function getSupportMailer() {
+  if (!process.env.SUPPORT_SMTP_USER || !process.env.SUPPORT_SMTP_PASS) return null;
+  if (!supportMailer) supportMailer = nodemailer.createTransport({ host: "smtp.gmail.com", port: 465, secure: true, auth: { user: process.env.SUPPORT_SMTP_USER, pass: process.env.SUPPORT_SMTP_PASS } });
+  return supportMailer;
+}
+async function sendSignupWelcome(a, toEmail) {
+  const m = getSupportMailer();
+  if (!m) { console.log("[welcome] SUPPORT_SMTP_* not set — skipped"); return false; }
+  const name = a.contact_name || a.name;
+  const end = a.trial_ends_at ? new Date(a.trial_ends_at).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" }) : "";
+  const html = `<div style="font-family:Arial,sans-serif;max-width:560px;color:#141B4D;line-height:1.55">
+<h2 style="margin:0 0 6px">Welcome to Aviolink, ${esc(name)} ✈️</h2>
+<p>Your free 30-day trial for <b>${esc(a.name)}</b> is active${end ? ` until <b>${end}</b>` : ""}.</p>
+<p><b>What happens now</b></p>
+<ol>
+<li><b>Connect your Gmail</b> (if you haven't yet) — the mailbox where airline and supplier mails arrive. Read-only: Aviolink never sends or deletes mail.</li>
+<li>Aviolink reads your past 12 months of tickets, then watches every new mail — schedule changes, delays and cancellations from any airline, in any language.</li>
+<li>When a flight changes, you get a WhatsApp message and the alert waits in your dashboard. One tap sends it to your client — with <b>${esc(a.name)}</b>'s name and phone number in the message.</li>
+</ol>
+<p style="margin:22px 0"><a href="https://app.aviolink.in" style="background:#1E2761;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold">Open your dashboard</a></p>
+<p><b>Tips</b><br>• Add your client's mobile on the alert (or on the ticket mail) so it can be sent in one tap.<br>• In Settings you can switch on auto-send for complete, confident alerts.</p>
+<p>Questions? Just reply to this mail, or WhatsApp us at +91 92705 46474.</p>
+<p>Team Aviolink<br><a href="https://aviolink.in">aviolink.in</a></p>
+<p style="color:#6B7280;font-size:12px">Aviolink is a brand of Finch Travels, Pune.</p></div>`;
+  await m.sendMail({ from: `"Aviolink" <${process.env.SUPPORT_SMTP_USER}>`, replyTo: process.env.SUPPORT_SMTP_USER, to: toEmail, bcc: process.env.SUPPORT_SMTP_USER,
+    subject: `Welcome to Aviolink — your 30-day trial is active`, html });
+  return true;
+}
+
 // ---------- welcome mails for new signups ----------
 async function sendWelcomes() {
   const { data: fresh } = await sb.from("agencies")
@@ -1323,7 +1355,7 @@ async function proofReport(days = 30, slug = "") {
 // ---------- HTTP: OAuth callback + health ----------
 let DASH = null;
 function startHttp() {
-  DASH = require("./dashboard")({ sb, gmail, getAgencies: () => AGENCIES, defaultAgencyId: () => DEFAULT_AGENCY?.id, loadAgencies, GMAIL_HEALTH, sendAlertToClient, adminCard, esc, waEnabled: () => WA.enabled() });
+  DASH = require("./dashboard")({ sb, gmail, getAgencies: () => AGENCIES, defaultAgencyId: () => DEFAULT_AGENCY?.id, sendSignupWelcome, loadAgencies, GMAIL_HEALTH, sendAlertToClient, adminCard, esc, waEnabled: () => WA.enabled() });
   const port = Number(process.env.PORT || 8080);
   const site = (process.env.SITE_URL || "https://aviolink.in").replace(/\/$/, "");
   http.createServer(async (req, res) => {

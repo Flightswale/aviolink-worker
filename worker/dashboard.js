@@ -85,6 +85,8 @@ module.exports = function makeDashboard(ctx) {
     // ---- login flow (Google, email only) ----
     if (p === "/login") {
       if (!gmail.enabled()) return json(res, 503, { error: "Google sign-in not configured" });
+      const ref = String(u.searchParams.get("ref") || "").toLowerCase();
+      if (/^[a-z0-9-]{2,60}$/.test(ref)) res.setHeader("set-cookie", `av_ref=${ref}; Path=/; Secure; SameSite=Lax; Max-Age=${30 * 86400}${cookieDomain(host)}`);
       const back = /^(app|api)\.aviolink\.in$/.test(host) || host.endsWith(".up.railway.app") ? host : "app.aviolink.in";
       const raw = `login~${back}~${Date.now()}`;
       res.writeHead(302, { location: gmail.loginUrl(`${raw}~${sign(raw)}`) }); res.end(); return true;
@@ -148,6 +150,9 @@ module.exports = function makeDashboard(ctx) {
       const row = { name, slug, contact_name: contact || null, plan: "trial", trial_ends_at: new Date(Date.now() + 30 * DAY).toISOString(),
         notify_email: sess.email, owner_phone: phone, whatsapp: phone, status: "active", login_emails: [sess.email],
         alerts_email: `${slug}@aviolink.in`, welcome_sent: true, gstin: gstin || null, legal_name: legal || null, billing_address: addr || null };
+      const refSlug = String(cookies(req).av_ref || "").toLowerCase();
+      let referrer = null;
+      if (/^[a-z0-9-]{2,60}$/.test(refSlug)) { const { data: r } = await sb.from("agencies").select("id,name").eq("slug", refSlug).maybeSingle(); if (r) { referrer = r; row.referred_by = r.id; } }
       let ins = await sb.from("agencies").insert(row).select("id").single();
       if (ins.error && /column/i.test(ins.error.message)) { // older table: keep only the core fields
         const { name: n, slug: s, plan, trial_ends_at, notify_email, owner_phone, whatsapp } = row;
@@ -159,7 +164,7 @@ module.exports = function makeDashboard(ctx) {
       // Reply first; welcome mail + Telegram note in the background (never block signup on email)
       (async () => {
         const welcomed = ctx.sendSignupWelcome ? await ctx.sendSignupWelcome({ ...row, id: ins.data.id }, sess.email).catch((e) => { console.error("[welcome]", e.message); return false; }) : false;
-      await adminCard(`🆕 <b>NEW AGENCY SIGNUP</b>\n🏢 ${esc(name)}${contact ? " · " + esc(contact) : ""}\n📧 ${esc(sess.email)} · 📞 ${esc(phone)}${gstin ? "\n🧾 GSTIN " + esc(gstin) + " · " + esc(legal) : "\n🧾 No GSTIN given"}\n30-day trial started — next step for them: connect Gmail.\n${welcomed ? "✉️ Welcome mail sent from support@aviolink.in" : "✉️ Welcome mail NOT sent (support mail not set up)"}`).catch(() => {});
+      await adminCard(`🆕 <b>NEW AGENCY SIGNUP</b>\n🏢 ${esc(name)}${contact ? " · " + esc(contact) : ""}\n📧 ${esc(sess.email)} · 📞 ${esc(phone)}${gstin ? "\n🧾 GSTIN " + esc(gstin) + " · " + esc(legal) : "\n🧾 No GSTIN given"}\n30-day trial started — next step for them: connect Gmail.${referrer ? "\n🤝 Referred by " + esc(referrer.name) + " (they get 1 month free when this agency pays)" : ""}\n${welcomed ? "✉️ Welcome mail sent from support@aviolink.in" : "✉️ Welcome mail NOT sent (support mail not set up)"}`).catch(() => {});
       })();
       return json(res, 200, { ok: true }), true;
     }
@@ -246,6 +251,31 @@ module.exports = function makeDashboard(ctx) {
       const ag = sess.actAs || sess.agencyId;
       if (!ag) return json(res, 400, { error: "no agency" }), true;
       res.writeHead(302, { location: gmail.authUrl(ag) }); res.end(); return true;
+    }
+
+    // Referral link + stats for the agency
+    if (p === "/api/referrals") {
+      const ag = sess.actAs || sess.agencyId;
+      if (!ag) return json(res, 200, { link: null, list: [] }), true;
+      const a = await agencyById(ag);
+      const { data } = await sb.from("agencies").select("name,created_at,referral_rewarded").eq("referred_by", ag).order("created_at", { ascending: false });
+      return json(res, 200, { link: a?.slug ? `https://aviolink.in/signup.html?ref=${a.slug}` : null, list: data || [] }), true;
+    }
+    // Admin: accounts (GST invoices by month)
+    if (p === "/api/admin/accounts" || p === "/api/admin/accounts.csv") {
+      if (!sess.admin || !ctx.invoices) return json(res, 403, { error: "admin only" }), true;
+      const month = /^\d{4}-\d{2}$/.test(u.searchParams.get("month") || "") ? u.searchParams.get("month") : new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 7);
+      if (p.endsWith(".csv")) {
+        const r = await ctx.invoices.register(month);
+        res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="Aviolink-GST-register-${month}.csv"` }); res.end(r.csv); return true;
+      }
+      const from = new Date(`${month}-01T00:00:00+05:30`), to = new Date(from); to.setMonth(to.getMonth() + 1);
+      const { data } = await sb.from("invoices").select("id,invoice_no,issued_at,buyer_name,buyer_gstin,place_of_supply,taxable,cgst,sgst,igst,total,payment_id,method").gte("issued_at", from.toISOString()).lt("issued_at", to.toISOString()).order("seq");
+      const rows = data || [], sum = (k) => Math.round(rows.reduce((t, r) => t + Number(r[k] || 0), 0) * 100) / 100;
+      const { data: allInv } = await sb.from("invoices").select("issued_at,total,cgst,sgst,igst");
+      const byMonth = {};
+      for (const r of allInv || []) { const m = new Date(new Date(r.issued_at).getTime() + 5.5 * 3600000).toISOString().slice(0, 7); byMonth[m] = byMonth[m] || { count: 0, total: 0, gst: 0 }; byMonth[m].count++; byMonth[m].total += Number(r.total); byMonth[m].gst += Number(r.cgst) + Number(r.sgst) + Number(r.igst); }
+      return json(res, 200, { month, rows, totals: { count: rows.length, taxable: sum("taxable"), cgst: sum("cgst"), sgst: sum("sgst"), igst: sum("igst"), total: sum("total") }, months: Object.entries(byMonth).sort((a, b) => (a[0] < b[0] ? 1 : -1)).map(([m, v]) => ({ month: m, count: v.count, total: Math.round(v.total * 100) / 100, gst: Math.round(v.gst * 100) / 100 })), sac: ctx.invoices.SAC }), true;
     }
 
     // GST invoices (own agency; admin sees all)

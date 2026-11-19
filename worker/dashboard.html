@@ -160,7 +160,7 @@ function renderSignup() {
 
 // ---------- shell ----------
 function navItems() {
-  if (ME.admin && !ME.actAs) return [["agencies", "🏢 Agencies"], ["alerts", "⚡ All alerts"], ["skipped", "🔍 Skipped mail"]];
+  if (ME.admin && !ME.actAs) return [["agencies", "🏢 Agencies"], ["alerts", "⚡ All alerts"], ["skipped", "🔍 Skipped mail"], ["accounts", "📒 Accounts"]];
   return [["alerts", "⚡ Alerts"], ["bookings", "🎫 Bookings"], ["mail", "📨 Mail log"], ["gmail", "📬 Gmail"], ["settings", "⚙️ Settings"]];
 }
 function shell() {
@@ -205,6 +205,7 @@ async function render() {
     else if (VIEW === "gmail") vGmail(m);
     else if (VIEW === "settings") vSettings(m);
     else if (VIEW === "agencies") await vAgencies(m);
+    else if (VIEW === "accounts") await vAccounts(m);
   } catch (e) { if (e.message !== "login") m.innerHTML = actAsBanner() + `<div class="err">${h(e.message)}</div>`; }
   const ba2 = $("#backadmin"); if (ba2) ba2.onclick = async () => { await post("/api/admin/actas", { agencyId: null }); await boot(); };
 }
@@ -340,7 +341,14 @@ function vSettings(m) {
       <div class="field"><label>Plan</label><div>${a.plan === "trial" ? `Free trial${a.trial_ends_at ? " — ends " + new Date(a.trial_ends_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : ""}<div style="margin-top:8px"><button class="btn green" data-subscribe>Pay for 1 month${a.price ? " · ₹" + Number(a.price).toLocaleString("en-IN") : ""}</button></div><small class="mut">UPI, card or net banking · one month at a time · no auto-debit</small>` : a.plan === "paid" ? `Paid${a.paid_until ? " — valid till " + new Date(a.paid_until).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : ""}<div style="margin-top:8px"><button class="btn green" data-subscribe>Pay for next month${a.price ? " · ₹" + Number(a.price).toLocaleString("en-IN") : ""}</button></div><small class="mut">Adds 1 month after your current expiry · no auto-debit</small>` : h(a.plan || "-")}</div></div>
     </div></div>
     <button class="btn pri" id="s-save">Save settings</button>
+    <div class="card" style="margin-top:20px"><b>🤝 Refer an agency — get 1 month free</b><div id="s-ref" class="mut" style="margin-top:8px">Loading…</div></div>
     <div class="card" style="margin-top:20px"><b>GST invoices</b><div id="s-inv" class="mut" style="margin-top:8px">Loading…</div></div>`;
+  api("/api/referrals").then((R) => { const el = $("#s-ref"); if (!el || !R.link) { if (el) el.textContent = ""; return; }
+    const msg = encodeURIComponent(`I use Aviolink — it reads airline mails and WhatsApps my clients when a flight changes. Free 30-day trial: ${R.link}`);
+    el.innerHTML = `<p style="margin:0 0 10px">Share your link. When an agency signs up with it and pays, you get <b>1 month free</b> — for every agency.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input readonly value="${h(R.link)}" id="s-reflink" style="flex:1;min-width:220px"><button class="btn" id="s-refcopy">Copy</button><a class="btn green" target="_blank" rel="noopener" href="https://wa.me/?text=${msg}">Share on WhatsApp</a></div>
+      <p style="margin:10px 0 0">${R.list.length ? R.list.map((x) => `${h(x.name)} — ${x.referral_rewarded ? "✅ paid · 1 month added" : "on trial"}`).join("<br>") : "No referrals yet."}</p>`;
+    $("#s-refcopy").onclick = () => { navigator.clipboard.writeText(R.link).then(() => toast("✓ Link copied")); }; }).catch(() => {});
   api("/api/invoices").then((L) => { const el = $("#s-inv"); if (!el) return;
     el.innerHTML = L.length ? `<div class="tablewrap"><table><tr><th>Invoice</th><th>Date</th><th>Amount</th><th></th></tr>${L.map((i) => `<tr><td>${h(i.invoice_no)}</td><td>${new Date(i.issued_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</td><td>₹${Number(i.total).toLocaleString("en-IN")}</td><td><a href="/api/invoices/${i.id}/pdf">Download PDF</a></td></tr>`).join("")}</table></div>` : "No invoices yet. An invoice is emailed to you after every payment."; }).catch(() => { const el = $("#s-inv"); if (el) el.textContent = "Could not load invoices."; });
   $("#s-save").onclick = async () => {
@@ -351,6 +359,28 @@ function vSettings(m) {
       ME.agency = r.agency; toast("✓ Saved"); shell();
     } catch (e) { toast(e.message); btn.disabled = false; }
   };
+}
+
+// ---------- admin: accounts ----------
+let ACC_MONTH = null;
+async function vAccounts(m) {
+  const d = await api(`/api/admin/accounts${ACC_MONTH ? "?month=" + ACC_MONTH : ""}`);
+  ACC_MONTH = d.month;
+  const inr = (x) => "₹" + Number(x || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const T = d.totals;
+  m.innerHTML = `<h1>Accounts</h1><p class="sub">GST tax invoices issued by Finch Travels for Aviolink (SAC ${h(d.sac)}, 18%). Payments are received in Razorpay and settled to the bank.</p>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px"><label>Month <input type="month" id="acc-m" value="${h(d.month)}"></label>
+      <a class="btn" href="/api/admin/accounts.csv?month=${h(d.month)}">⬇ GST register (CSV for CA)</a></div>
+    <div class="card" style="display:flex;gap:28px;flex-wrap:wrap;margin-bottom:14px">
+      <div><div class="mut">Invoices</div><b>${T.count}</b></div><div><div class="mut">Taxable</div><b>${inr(T.taxable)}</b></div>
+      <div><div class="mut">CGST</div><b>${inr(T.cgst)}</b></div><div><div class="mut">SGST</div><b>${inr(T.sgst)}</b></div><div><div class="mut">IGST</div><b>${inr(T.igst)}</b></div>
+      <div><div class="mut">Total received</div><b>${inr(T.total)}</b></div></div>
+    ${d.rows.length ? `<div class="tablewrap"><table><tr><th>Invoice</th><th>Date</th><th>Agency</th><th>GSTIN</th><th>Taxable</th><th>GST</th><th>Total</th><th></th></tr>
+      ${d.rows.map((r) => `<tr><td>${h(r.invoice_no)}</td><td>${new Date(r.issued_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</td><td>${h(r.buyer_name)}</td><td class="mut">${h(r.buyer_gstin || "B2C")}</td>
+        <td>${inr(r.taxable)}</td><td>${inr(Number(r.cgst) + Number(r.sgst) + Number(r.igst))}</td><td><b>${inr(r.total)}</b></td><td><a href="/api/invoices/${r.id}/pdf">PDF</a></td></tr>`).join("")}</table></div>` : `<div class="card empty">No invoices in this month.</div>`}
+    ${d.months.length ? `<h2 style="margin-top:26px;font-size:1.1rem">All months</h2><div class="tablewrap"><table><tr><th>Month</th><th>Invoices</th><th>GST</th><th>Total</th></tr>${d.months.map((x) => `<tr><td><a href="#" data-mm="${x.month}">${x.month}</a></td><td>${x.count}</td><td>${inr(x.gst)}</td><td>${inr(x.total)}</td></tr>`).join("")}</table></div>` : ""}`;
+  $("#acc-m").onchange = (e) => { ACC_MONTH = e.target.value; vAccounts(m); };
+  m.querySelectorAll("[data-mm]").forEach((a) => a.onclick = (e) => { e.preventDefault(); ACC_MONTH = a.dataset.mm; vAccounts(m); });
 }
 
 // ---------- admin: agencies ----------

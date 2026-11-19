@@ -41,3 +41,5 @@ create table if not exists invoices (id bigserial primary key, invoice_no text u
   taxable numeric, cgst numeric, sgst numeric, igst numeric, total numeric, method text, mailed_at timestamptz, created_at timestamptz default now());
 create unique index if not exists invoices_fy_seq on invoices (fy, seq);
 alter table invoices enable row level security;
+alter table agencies add column if not exists referred_by text;
+alter table agencies add column if not exists referral_rewarded boolean;

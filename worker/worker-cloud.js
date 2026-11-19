@@ -1533,7 +1533,27 @@ async function tgDoc(filename, buf, caption, type = "application/pdf") {
   return r;
 }
 const invFile = (inv) => `Aviolink-Invoice-${inv.invoice_no.replace(/\//g, "-")}.pdf`;
+// Referral: when a referred agency pays for the first time, the referring agency gets 1 month free
+async function rewardReferral(agencyId) {
+  const { data: a } = await sb.from("agencies").select("id,name,referred_by,referral_rewarded").eq("id", agencyId).maybeSingle();
+  if (!a?.referred_by || a.referral_rewarded) return;
+  const { data: claimed } = await sb.from("agencies").update({ referral_rewarded: true }).eq("id", a.id).is("referral_rewarded", null).select("id");
+  if (!claimed?.length) { const { data: c2 } = await sb.from("agencies").update({ referral_rewarded: true }).eq("id", a.id).eq("referral_rewarded", false).select("id"); if (!c2?.length) return; }
+  const { data: r } = await sb.from("agencies").select("id,name,plan,paid_until,trial_ends_at,notify_email,contact_name").eq("id", a.referred_by).maybeSingle();
+  if (!r) return;
+  const paid = r.plan === "paid" && r.paid_until;
+  const base = Math.max(Date.now(), new Date((paid ? r.paid_until : r.trial_ends_at) || 0).getTime());
+  const until = new Date(base + 30 * 86400000).toISOString();
+  await sb.from("agencies").update(paid ? { paid_until: until } : { trial_ends_at: until }).eq("id", r.id);
+  await loadAgencies();
+  const till = new Date(until).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "long", year: "numeric" });
+  await adminCard(`🤝 <b>REFERRAL REWARD</b> · 🏢 ${esc(r.name)} referred ${esc(a.name)}, who just paid.\n1 month free added — ${esc(r.name)} is now valid till ${till}.`).catch(() => {});
+  const m = getSupportMailer();
+  if (m && r.notify_email) await m.sendMail({ to: r.notify_email, bcc: SUPPORT_GMAIL.email, subject: "You earned 1 free month of Aviolink 🎉",
+    html: `<div style="font-family:Arial,sans-serif;max-width:560px;color:#141B4D;line-height:1.55"><p>Hi ${esc(r.contact_name || r.name)},</p><p><b>${esc(a.name)}</b> joined Aviolink on your recommendation and has started paying. Thank you!</p><p>We've added <b>1 month free</b> to your account — you're now covered till <b>${till}</b>.</p><p>Every agency you refer earns you another free month. Your referral link is in Settings in your dashboard.</p><p>Team Aviolink · <a href="https://aviolink.in">aviolink.in</a></p></div>` }).catch((e) => console.error("[referral-mail]", e.message));
+}
 async function issueInvoice(agencyId, pay, from, to) {
+  rewardReferral(agencyId).catch((e) => console.error("[referral]", e.message));
   const { data: a } = await sb.from("agencies").select("*").eq("id", agencyId).maybeSingle();
   if (!a) return;
   const inv = await INVOICES.create({ ...a, _from: from?.toISOString(), _to: to?.toISOString() }, pay);

@@ -487,10 +487,27 @@ async function alreadyProcessed(messageId) {
 async function logMail(agencyId, messageId, subject, verdict, detail = "") {
   await sb.from("mail_log").insert({ agency_id: agencyId, message_id: messageId, subject, verdict, detail });
 }
+// Merge new legs into the stored itinerary: replace legs that match (same sector or flight), keep the rest.
+// A partial mail never shrinks the booking, and empty passenger lists never wipe stored names.
+function mergeSegments(oldSegs, newSegs) {
+  if (!oldSegs || !oldSegs.length) return newSegs || [];
+  if (!newSegs || !newSegs.length) return oldSegs;
+  const ns = (x) => String(x || "").toUpperCase().replace(/[^A-Z]/g, "");
+  const nf = (x) => String(x || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const out = oldSegs.slice(); const used = new Set();
+  for (const n of newSegs) {
+    let i = out.findIndex((o, k) => !used.has(k) && ns(o.sector) && ns(o.sector) === ns(n.sector));
+    if (i < 0) i = out.findIndex((o, k) => !used.has(k) && nf(o.flight) && nf(o.flight) === nf(n.flight));
+    if (i >= 0) { out[i] = { ...out[i], ...n }; used.add(i); } else { out.push(n); used.add(out.length - 1); }
+  }
+  return out;
+}
 async function upsertBooking(agencyId, parsed, extra = {}) {
+  const { data: prev } = await sb.from("bookings").select("passengers,segments").eq("agency_id", agencyId).eq("pnr", parsed.pnr).maybeSingle();
   await sb.from("bookings").upsert({
     agency_id: agencyId, pnr: parsed.pnr, airline: parsed.airline || null,
-    passengers: parsed.passengers || [], segments: parsed.segments || [],
+    passengers: (parsed.passengers && parsed.passengers.length) ? parsed.passengers : (prev?.passengers || []),
+    segments: mergeSegments(prev?.segments || [], parsed.segments || []),
     source: parsed.source || null, ...extra,
   }, { onConflict: "agency_id,pnr" });
 }
@@ -1207,7 +1224,9 @@ function diffItinerary(oldSegs, newSegs) {
     if (isChg) changed = true;
     out.push({ sector: n.sector || o.sector, status: isChg ? "CHANGED" : "UNCHANGED", old: o, new: n });
   }
-  oldSegs.forEach((o, i) => { if (!used.has(i)) { out.push({ sector: o.sector, status: "CANCELLED", old: o, new: null }); changed = true; } });
+  // A later mail (check-in, boarding pass, one-leg notice) often lists only some legs. A leg that is merely
+  // absent is NOT a cancellation — cancellations come only from explicit cancellation notices.
+  oldSegs.forEach((o, i) => { if (!used.has(i)) out.push({ sector: o.sector, status: "UNCHANGED", old: o, new: o }); });
   if (!changed) return null;
   return { segments: out, cancelledOnly: out.every((s) => s.status === "CANCELLED" || s.status === "UNCHANGED") && out.some((s) => s.status === "CANCELLED") };
 }

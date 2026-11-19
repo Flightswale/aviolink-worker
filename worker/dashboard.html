@@ -264,6 +264,8 @@ function alertCard(a, showAgency) {
       ${canSend ? `<input id="mob-${a.id}" placeholder="Client mobile e.g. 9876543210" value="${h(a.client_mobile)}" style="width:220px">
       <button class="btn green" data-send="${a.id}" ${ME.waReady ? "" : "disabled title='WhatsApp not configured'"}>Send on WhatsApp</button>
       <button class="btn ghost" data-ign="${a.id}">Ignore</button>` : ""}
+      ${b === "sent" ? `<input id="mob-${a.id}" placeholder="Client mobile e.g. 9876543210" value="" style="width:220px">
+      <button class="btn" data-send="${a.id}" ${ME.waReady ? "" : "disabled title='WhatsApp not configured'"}>Send to another number</button>` : ""}
       <button class="btn ghost" data-prev="${a.id}">Preview client message</button>
     </div>
     <div id="pv-${a.id}" hidden><div class="mut" style="margin:6px 0 4px">${a.client_text ? "Exactly what your client receives on WhatsApp:" : "Preview (passenger names not yet available):"}</div><pre class="msg">${h(a.client_text || a.text)}</pre></div></div>`;

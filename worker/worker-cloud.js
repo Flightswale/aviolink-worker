@@ -176,7 +176,7 @@ function templateV2For(p, agency) {
   for (const s of legs) {
     const arrow = (x) => String(x || "").replace(/\s*(→|->|-)\s*/, " → ");
     const ns3 = (x) => (String(x || "").toUpperCase().match(/[A-Z]{3}/g) || []).join("-");
-    params.push(s.new?.sector && ns3(s.new.sector) !== ns3(s.sector) ? `${arrow(s.new.sector)} (airport changed, was ${arrow(s.sector)})` : arrow(s.sector));
+    params.push(s.airportChanged && s.new?.sector && ns3(s.new.sector) !== ns3(s.sector) ? `${arrow(s.new.sector)} (airport changed, was ${arrow(s.sector)})` : arrow(s.sector));
     params.push(legShort(s.old) || "As per your ticket");
     let rev = legShort(s.new);
     if (!cancelled && rev && s.old && s.new) {
@@ -666,7 +666,11 @@ function fixNewAirport(p, bookingSegments) {
   for (const s of p.segments || []) {
     if (!s.old || !s.new || nf(s.old.flight) === nf(s.new.flight) || s.new.sector) continue;
     const bs = (bookingSegments || []).find((x) => nf(x.flight) === nf(s.new.flight) && (!x.date || !s.new.date || x.date === s.new.date));
-    if (bs && ns(bs.sector) && ns(bs.sector) !== ns(s.sector)) { s.new.sector = bs.sector; touched = true; }
+    if (!bs || !ns(bs.sector) || ns(bs.sector) === ns(s.sector)) continue;
+    const bo = (bookingSegments || []).find((x) => nf(x.flight) === nf(s.old.flight) && (!x.date || !s.old.date || x.date === s.old.date));
+    if (bo && ns(bo.sector) && ns(bo.sector) !== ns(bs.sector)) { s.sector = bo.sector; s.new.sector = bs.sector; s.airportChanged = true; } // both routes confirmed by tickets
+    else { s.sector = bs.sector; } // old route not on file → the mail's airport was a misreading; use the ticket's route, claim no change
+    touched = true;
   }
   return touched;
 }

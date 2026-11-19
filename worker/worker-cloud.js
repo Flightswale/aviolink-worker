@@ -382,7 +382,7 @@ async function pollTelegram() {
       const ex2 = ["DEL \u2192 PNQ", "6E 2419 \u00b7 14 Dec \u00b7 19:00-21:05", "6E 2419 \u00b7 14 Dec \u00b7 19:30-21:35"];
       const exC1 = ["Mr. Rahul Sharma", "AB12CD", "IndiGo (6E)", "PNQ \u2192 DEL", "6E 2418 \u00b7 10 Dec \u00b7 06:10-08:15", "6E 2422 \u00b7 10 Dec \u00b7 09:30-11:35"];
       const exC2 = ["DEL \u2192 PNQ", "6E 2419 \u00b7 14 Dec \u00b7 19:00-21:05", "Not offered by the airline - full refund applicable"];
-      const ag = ["Finch Travels", "+91 92705 46474"];
+      const ag = ["Finch Travels", "+91 95032 55845"];
       const defs = [
         ["flight_change_1leg", head("changed the schedule of") + L1(4, "Previous", "Revised") + tail(7), [...ex1, ...ag]],
         ["flight_change_2leg", head("changed the schedule of") + L1(4, "Previous", "Revised") + "\n\n" + L1(7, "Previous", "Revised") + tail(10), [...ex1, ...ex2, ...ag]],
@@ -787,7 +787,7 @@ async function sendSignupWelcome(a, toEmail) {
 </ol>
 <p style="margin:22px 0"><a href="https://app.aviolink.in" style="background:#1E2761;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold">Open your dashboard</a></p>
 <p><b>Tips</b><br>• Add your client's mobile on the alert (or on the ticket mail) so it can be sent in one tap.<br>• In Settings you can switch on auto-send for complete, confident alerts.</p>
-<p>Questions? Just reply to this mail, or WhatsApp us at +91 92705 46474.</p>
+<p>Questions? Just reply to this mail, or WhatsApp us at +91 95032 55845.</p>
 <p>Team Aviolink<br><a href="https://aviolink.in">aviolink.in</a></p>
 <p style="color:#6B7280;font-size:12px">Aviolink is a brand of Finch Travels, Pune.</p></div>`;
   await m.sendMail({ from: `"Aviolink" <${SUPPORT_GMAIL.email}>`, replyTo: SUPPORT_GMAIL.email, to: toEmail, bcc: SUPPORT_GMAIL.email,
@@ -825,7 +825,7 @@ Tips:
 - Also forward your recent unflown ticket mails once - alerts will then always carry your passenger's name.
 - We read only airline/booking mails; everything else is discarded instantly.
 
-Questions? Reply to this mail, write to support@aviolink.in or WhatsApp +91-9270546474.
+Questions? Reply to this mail, write to support@aviolink.in or WhatsApp +91-9503255845.
 
 Fly safe,
 Team Aviolink
@@ -1167,7 +1167,7 @@ async function aiPickTravel(lines) {
 
 const LEGAL_CSS = `<meta name=viewport content="width=device-width,initial-scale=1"><style>body{font-family:system-ui;max-width:760px;margin:40px auto;padding:0 18px;color:#1f2937;line-height:1.6}h1{color:#1E2761}h2{color:#1E2761;font-size:1.1rem;margin-top:26px}</style>`;
 const PRIVACY_HTML = `<!doctype html><title>Privacy Policy — Aviolink</title>${LEGAL_CSS}
-<h1>Aviolink FlightAlert — Privacy Policy</h1><p>Last updated: 17 October 2026. Operated by Finch Travels, Pune, India (support@aviolink.in, +91 9270546474).</p>
+<h1>Aviolink FlightAlert — Privacy Policy</h1><p>Last updated: 17 October 2026. Operated by Finch Travels, Pune, India (support@aviolink.in, +91 9503255845).</p>
 <h2>What we access</h2><p>When a travel agency connects its mailbox using "Sign in with Google", Aviolink receives read-only access (Gmail scope <code>gmail.readonly</code>). We never send, delete or modify mail, and we never see the account password.</p>
 <h2>What we use it for</h2><p>Solely to detect airline and travel-vendor emails — e-tickets, itineraries, schedule changes, delays and cancellations — and turn them into flight-change alerts for that agency. Other emails are skipped automatically and their content is not stored.</p>
 <h2>What we store</h2><p>From relevant airline mails only: PNR, airline, flight numbers, dates and timings, passenger names and contact number when present, and the alert text. We also store the message ID and subject to avoid processing a mail twice. Data is stored in an encrypted database (Supabase, India region) and is used only to provide the service to that agency.</p>
@@ -1462,7 +1462,7 @@ async function trialReminders() {
       const subj = step === "ended" ? "Your Aviolink trial has ended" : `Your Aviolink trial ends ${left === 1 ? "tomorrow" : "on " + end}`;
       const lead = step === "ended" ? "Your free trial has ended, so new flight-change alerts are paused." : `Your free trial ends ${left === 1 ? "tomorrow" : "on <b>" + end + "</b>"}.`;
       await m.sendMail({ from: `"Aviolink" <${SUPPORT_GMAIL.email}>`, to: a.notify_email, bcc: SUPPORT_GMAIL.email, subject: subj,
-        html: `<div style="font-family:Arial,sans-serif;max-width:560px;color:#141B4D;line-height:1.55"><p>Hi ${esc(a.contact_name || a.name)},</p><p>${lead}</p><p>So far Aviolink has caught <b>${count || 0} flight change${count === 1 ? "" : "s"}</b> for ${esc(a.name)}.</p><p>To ${step === "ended" ? "switch alerts back on" : "keep receiving alerts without a break"}, click <b>Subscribe</b> in your dashboard (UPI AutoPay or card, renews monthly), or reply to this mail / WhatsApp us at <b>+91 92705 46474</b>.</p><p style="margin:22px 0"><a href="https://app.aviolink.in" style="background:#1E2761;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold">Open your dashboard</a></p><p>Team Aviolink · <a href="https://aviolink.in">aviolink.in</a></p></div>` }).catch((e) => console.error("[trial-mail]", e.message));
+        html: `<div style="font-family:Arial,sans-serif;max-width:560px;color:#141B4D;line-height:1.55"><p>Hi ${esc(a.contact_name || a.name)},</p><p>${lead}</p><p>So far Aviolink has caught <b>${count || 0} flight change${count === 1 ? "" : "s"}</b> for ${esc(a.name)}.</p><p>To ${step === "ended" ? "switch alerts back on" : "keep receiving alerts without a break"}, click <b>Subscribe</b> in your dashboard (UPI AutoPay or card, renews monthly), or reply to this mail / WhatsApp us at <b>+91 95032 55845</b>.</p><p style="margin:22px 0"><a href="https://app.aviolink.in" style="background:#1E2761;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold">Open your dashboard</a></p><p>Team Aviolink · <a href="https://aviolink.in">aviolink.in</a></p></div>` }).catch((e) => console.error("[trial-mail]", e.message));
     }
     await sb.from("agencies").update({ trial_reminder: step }).eq("id", a.id);
   }

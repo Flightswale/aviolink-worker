@@ -32,7 +32,7 @@ module.exports = function makeBilling({ sb, adminCard, esc, loadAgencies }) {
 
   // Start a subscription for an agency → URL of Razorpay's payment page
   async function subscribe(agency, email) {
-    if (!enabled()) throw new Error("Online payment is being set up — please WhatsApp +91 92705 46474 to subscribe.");
+    if (!enabled()) throw new Error("Online payment is being set up — please WhatsApp +91 95032 55845 to subscribe.");
     const plan = await ensurePlan();
     // Customer record carries name, email, phone and GSTIN → Razorpay invoices are proper B2B GST invoices
     let customerId = null;

@@ -133,7 +133,7 @@ function renderSignup() {
     <div class="logo" style="color:var(--navy);font-size:24px;text-align:center">Avio<span style="color:#d4a017">link</span></div>
     <h2 style="text-align:center">Start your free 30-day trial</h2>
     <p class="mut" style="text-align:center;margin-top:0">Signed in as <b>${h(ME.email)}</b></p>
-    <div class="mut" style="display:flex;gap:8px;justify-content:center;font-size:12px;margin:6px 0 18px"><span class="pill p-info">1 · Your agency</span><span class="pill p-mut">2 · Connect mail</span><span class="pill p-mut">3 · Done</span></div>
+    <div class="mut" style="display:flex;gap:8px;justify-content:center;font-size:12px;margin:6px 0 18px"><span class="pill p-info">1 · Your agency</span><span class="pill p-mut">2 · Connect Gmail</span><span class="pill p-mut">3 · Done</span></div>
     <div class="field"><label for="su-name">Agency name</label><input id="su-name" placeholder="e.g. Sai Tours &amp; Travels" autocomplete="organization"><small>Your clients see this name in every alert.</small></div>
     <div class="field"><label for="su-contact">Your name</label><input id="su-contact" placeholder="e.g. Amit Patil" autocomplete="name"></div>
     <div class="field"><label for="su-phone">Phone shown to clients</label><input id="su-phone" placeholder="e.g. +91 98765 43210" autocomplete="tel" inputmode="tel"><small>"For any queries, please contact <i>your agency</i> at this number."</small></div>
@@ -144,7 +144,7 @@ function renderSignup() {
       <div class="field"><label for="su-addr">Billing address (as on GST certificate)</label><input id="su-addr"></div>
       </div></details>
     <label class="toggle" style="margin:6px 0 16px;font-size:13px"><input type="checkbox" id="su-agree"><span>I agree to the <a href="https://aviolink.in/terms.html" target="_blank" rel="noopener">Terms of Service</a> and <a href="https://aviolink.in/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>.</span></label>
-    <button class="btn pri" id="su-go" style="width:100%;padding:12px">Create account</button>
+    <button class="btn pri" id="su-go" style="width:100%;padding:12px">Create account &amp; connect Gmail</button>
     <div class="err" id="su-err" hidden></div>
     <p class="mut" style="font-size:12px;margin-top:14px;text-align:center">No card needed. Aviolink only reads your mail (read-only) — it never sends or deletes anything. <a href="/logout">Use a different Google account</a></p>
   </div></div>`;
@@ -153,15 +153,15 @@ function renderSignup() {
     try {
       await post("/api/signup", { name: $("#su-name").value, contact: $("#su-contact").value, phone: $("#su-phone").value, agree: $("#su-agree").checked,
         gstin: $("#su-gstin").value, legal_name: $("#su-legal").value, billing_address: $("#su-addr").value });
-      location.hash = "mail"; location.reload();
-    } catch (e) { err.textContent = e.message; err.hidden = false; btn.disabled = false; btn.textContent = "Create account"; }
+      btn.textContent = "Opening Google…"; location.href = "/api/gmail/connect";
+    } catch (e) { err.textContent = e.message; err.hidden = false; btn.disabled = false; btn.textContent = "Create account & connect Gmail"; }
   };
 }
 
 // ---------- shell ----------
 function navItems() {
   if (ME.admin && !ME.actAs) return [["agencies", "🏢 Agencies"], ["alerts", "⚡ All alerts"], ["skipped", "🔍 Skipped mail"]];
-  return [["alerts", "⚡ Alerts"], ["bookings", "🎫 Bookings"], ["mail", "📨 Mail log"], ["gmail", "📬 Mail connection"], ["settings", "⚙️ Settings"]];
+  return [["alerts", "⚡ Alerts"], ["bookings", "🎫 Bookings"], ["mail", "📨 Mail log"], ["gmail", "📬 Gmail"], ["settings", "⚙️ Settings"]];
 }
 function shell() {
   const items = navItems();
@@ -178,8 +178,7 @@ function actAsBanner() {
   let s = ME.admin && ME.actAs ? `<div class="banner">👁 Viewing as <b>${h(ME.agency.name)}</b> — anything you send goes out for this agency. <button class="btn ghost" id="backadmin">Back to admin</button></div>` : "";
   const a = ME.agency;
   if (a && (!ME.admin || ME.actAs)) {
-    const fwdOn = a.fwd && a.fwd.last_at;
-    if ((!a.gmail || !a.gmail.email) && !fwdOn) s += `<div class="banner" style="background:#eef1fb;border-color:#c7d0f5;color:var(--navy)">📬 <b>One step left:</b> let Aviolink see your airline mails — <a class="btn pri" style="text-decoration:none" href="/api/gmail/connect">Connect Gmail</a> or <button class="btn ghost" data-go="gmail">Forward mails instead</button></div>`;
+    if (!a.gmail || !a.gmail.email) s += `<div class="banner" style="background:#eef1fb;border-color:#c7d0f5;color:var(--navy)">📬 <b>One step left:</b> connect the Gmail where your airline and supplier mails arrive. <a class="btn pri" style="text-decoration:none" href="/api/gmail/connect">Connect Gmail</a></div>`;
     else if (a.gmail.backfill && a.gmail.backfill !== "done") s += `<div class="banner" style="background:#eef1fb;border-color:#c7d0f5;color:var(--navy)">⏳ Reading your past 12 months of ticket mails — new changes appear here as they arrive.</div>`;
     const subBtn = `<button class="btn green" data-subscribe>Subscribe${a.price ? " · ₹" + Number(a.price).toLocaleString("en-IN") + "/month" : ""}</button>`;
     if (a.plan === "trial" && a.trial_ends_at) {
@@ -308,28 +307,17 @@ async function vMail(m, skippedOnly) {
 
 // ---------- gmail ----------
 function vGmail(m) {
-  const g = ME.agency.gmail || {}, f = ME.agency.fwd || {};
+  const g = ME.agency.gmail || {};
   const healthy = g.email && g.last_ok && Date.now() - g.last_ok < 15 * 60000;
-  const fwdLive = f.last_at && Date.now() - new Date(f.last_at).getTime() < 3 * 86400000;
-  m.innerHTML = actAsBanner() + `<h1>Mail connection</h1><p class="sub">Choose how Aviolink receives your airline and supplier mails. Use one of the two.</p>
-    <div class="grid2">
-    <div class="card"><h3 style="margin:0 0 6px">Option A · Connect Gmail</h3><p class="mut" style="margin:0 0 12px">Fastest. Read-only — Aviolink never sends, deletes or changes mail. Past 12 months of tickets are loaded automatically.</p>
-      <div class="row" style="margin-bottom:12px">${g.email ? (healthy ? `<span class="pill p-ok">● Connected and reading</span>` : `<span class="pill p-warn">● Connected — not read recently</span>`) : `<span class="pill p-mut">Not connected</span>`}</div>
-      <div class="kv"><div>Mailbox</div><div><b>${h(g.email || "-")}</b></div>
-        <div>Last read</div><div>${g.last_ok ? when(g.last_ok) : "-"}</div>
-        <div>Past 12 months</div><div>${{ done: "Loaded", running: "Loading…", pending: "Starting", error: "Stopped with an error" }[g.backfill] || "-"}</div></div>
-      <div class="act" style="margin-top:14px"><a class="btn pri" style="text-decoration:none" href="/api/gmail/connect">${g.email ? "Reconnect Gmail" : "Connect Gmail"}</a></div></div>
-    <div class="card"><h3 style="margin:0 0 6px">Option B · Forward mails</h3><p class="mut" style="margin:0 0 12px">No access to your mailbox at all — you choose which mails are sent to Aviolink. Works with Gmail, Outlook, Zoho, Rediffmail and others.</p>
-      <div class="row" style="margin-bottom:12px">${fwdLive ? `<span class="pill p-ok">● Receiving forwarded mails</span>` : f.confirmed_at ? `<span class="pill p-info">● Confirmed — waiting for first mail</span>` : `<span class="pill p-mut">Not set up</span>`}</div>
-      <div class="field"><label>Your private Aviolink address</label><input readonly value="${h(f.address || "")}" onclick="this.select()"></div>
-      ${f.code && !f.confirmed_at ? `<div class="banner" style="margin:0 0 12px">Gmail confirmation code: <b style="font-size:18px;letter-spacing:1px">${h(f.code)}</b> — enter it in Gmail → Settings → Forwarding.</div>` : ""}
-      <details><summary style="cursor:pointer;font-weight:600">How to set it up in Gmail (3 minutes)</summary>
-      <ol style="padding-left:18px;line-height:1.6;font-size:13px">
-        <li>Gmail → ⚙️ Settings → <b>See all settings</b> → <b>Forwarding and POP/IMAP</b> → <b>Add a forwarding address</b> → paste the address above → Next → Proceed.</li>
-        <li>Aviolink confirms it automatically within a minute (if not, the code appears on this page — enter it in Gmail).</li>
-        <li>Don't switch on "Forward a copy" for all mail. Instead go to <b>Filters and Blocked Addresses</b> → <b>Create a new filter</b> → in <b>From</b> paste: <code style="font-size:12px">goindigo.in OR airindia.com OR airindiaexpress.com OR akasaair.com OR spicejet.com OR qatarairways.com OR emirates.com OR etihad.com OR flydubai.com OR singaporeair.com OR makemytrip.com OR cleartrip.com OR tripjack.com OR tbo.com</code> (add your own suppliers) → <b>Create filter</b> → tick <b>Forward it to</b> your Aviolink address → Create filter.</li>
-      </ol><p class="mut" style="font-size:12px">Outlook / Zoho: create a rule "From contains airline / supplier" → "Forward to" your Aviolink address.</p></details></div>
-    </div>`;
+  m.innerHTML = actAsBanner() + `<h1>Gmail connection</h1><p class="sub">Aviolink reads your airline and vendor mails (read-only) to find changes. It never sends or deletes mail.</p>
+    <div class="card"><div class="row" style="margin-bottom:14px">${g.email ? (healthy ? `<span class="pill p-ok">● Connected and reading</span>` : `<span class="pill p-warn">● Connected — not read recently</span>`) : `<span class="pill p-bad">● Not connected</span>`}</div>
+    <div class="kv"><div>Mailbox</div><div><b>${h(g.email || "-")}</b></div>
+      <div>Connected on</div><div>${g.connected_at ? new Date(g.connected_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "-"}</div>
+      <div>Last read</div><div>${g.last_ok ? when(g.last_ok) : "-"}</div>
+      <div>Past 12 months scan</div><div>${{ done: "Completed", running: "In progress", pending: "Starting", error: "Stopped with an error" }[g.backfill] || "-"}</div>
+      ${g.error && !healthy ? `<div>Last problem</div><div style="color:var(--bad)">${h(String(g.error).slice(0, 200))}</div>` : ""}</div>
+    <div class="act" style="margin-top:16px"><a class="btn pri" style="text-decoration:none" href="/api/gmail/connect">${g.email ? "Reconnect Gmail" : "Connect Gmail"}</a>
+      <span class="mut">Use this if you changed your Google password or the status above is not green.</span></div></div>`;
 }
 
 // ---------- settings ----------
@@ -387,7 +375,6 @@ async function vAgencies(m) {
   });
 }
 
-document.addEventListener("click", (e) => { const g = e.target.closest("[data-go]"); if (g) { VIEW = g.dataset.go; shell(); } });
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-subscribe]"); if (!b) return;
   b.disabled = true; const t = b.textContent; b.textContent = "Opening payment…";
@@ -397,8 +384,7 @@ document.addEventListener("click", async (e) => {
 async function boot() {
   try { ME = await api("/api/me"); }
   catch (e) { if (e.message === "suspended") { history.replaceState(null, "", "?e=suspended"); renderLogin(); } else if (e.message !== "login") renderLogin(); return; }
-  if (location.hash === "#mail") VIEW = "gmail";
-  if (location.search || location.hash) history.replaceState(null, "", location.pathname);
+  if (location.search) history.replaceState(null, "", location.pathname);
   if (ME.signup) { renderSignup(); return; }
   if (!ME.agency && !ME.admin) { renderLogin(); return; }
   shell();

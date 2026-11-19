@@ -139,7 +139,8 @@ function clientLegs(p) {
 }
 function clientName(p) {
   const pax = (p.passengers || []).map(titleName);
-  return pax.length ? pax[0] + (pax.length > 1 ? ` +${pax.length - 1}` : "") : "Customer";
+  const n = pax.length - 1;
+  return pax.length ? pax[0] + (n > 0 ? ` and ${n} other${n === 1 ? "" : "s"}` : "") : "Customer";
 }
 // v2 templates: each changed flight on its own lines, "Reply STOP" footer. 1 or 2 flights; more → v1.
 //   flight_change_1leg / flight_change_2leg / flight_cancel_1leg / flight_cancel_2leg

@@ -267,10 +267,13 @@ function alertCard(a, showAgency) {
     const st = s.status === "CANCELLED" || (s.old && !s.new) ? `<span class="pill p-bad">Cancelled</span>` : "";
     return `<div class="leg"><div class="mut">${h(String(s.sector || "").replace(/\s*(→|->)\s*/, "–"))}</div><div>${s.old ? `<span class="old">${h(legTxt(s.old))}</span><br>` : ""}${s.new ? `<span class="new">${h(legTxt(s.new))}</span>` : st || h(legTxt(s))}</div></div>`;
   }).join("");
-  const canSend = b === "tosend";
+  const nfx = (f) => String(f || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const noChange = !cancel && (p.segments || []).length > 0 && (p.segments || []).every((s) => s.old && s.new && nfx(s.old.flight) === nfx(s.new.flight) && s.old.date === s.new.date && s.old.dep === s.new.dep && s.old.arr === s.new.arr);
+  const canSend = b === "tosend" && !noChange;
   return `<div class="card"><div class="row"><span class="pnr">${h(a.pnr || "No PNR")}</span>
       <span class="pill ${cancel ? "p-bad" : "p-warn"}">${cancel ? "Cancellation" : "Schedule change"}</span>${statusPill(a)}
       ${showAgency ? `<span class="pill p-info">🏢 ${h(a.agency)}</span>` : ""}<span class="mut" style="margin-left:auto">${when(a.created_at)}</span></div>
+    ${noChange ? `<div class="err" style="margin:8px 0 0">Old and new timings are the same — nothing changed for the client. Ignore this alert.</div>` : ""}
     ${a._dups ? `<div class="mut" style="margin-top:6px">The airline sent this same change ${a._dups + 1} times — shown once.</div>` : ""}
     <div style="margin-top:8px">👤 ${pax.length ? h(pax.join(", ")) : `<span class="mut">Passenger names not yet available</span>`}${p.airline ? ` · <span class="mut">${h(p.airline)}</span>` : ""}</div>
     <div class="legs">${legs || `<span class="mut">No flight details</span>`}</div>

@@ -253,6 +253,14 @@ async function deliverClientWhatsApp(target, payload, agency, text) {
   return { ...r, via: "text" };
 }
 
+// True when at least one leg really differs (flight / date / times), or a leg is cancelled
+function hasRealChange(p) {
+  const nf = (f) => String(f || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const nt = (t) => { const m = String(t || "").match(/(\d{1,2}):?(\d{2})/); return m ? m[1].padStart(2, "0") + ":" + m[2] : ""; };
+  if (p.changeType === "CANCELLATION") return true;
+  return (p.segments || []).some((s) => s.status === "CANCELLED" || (s.old && !s.new) || (!s.old && s.new) ||
+    (s.old && s.new && (nf(s.old.flight) !== nf(s.new.flight) || (s.old.date || "") !== (s.new.date || "") || nt(s.old.dep) !== nt(s.new.dep) || nt(s.old.arr) !== nt(s.new.arr))));
+}
 // Exactly what the client will read on WhatsApp (approved template text with this alert's values)
 function clientPreviewText(payload, agency) {
   const p = payload || {};
@@ -298,6 +306,7 @@ async function sendAlertToClient(alertId, { mobile = null, actor = "telegram", f
   if (!target) return { ok: false, err: "No client mobile on file — enter it" };
   const { data: opt } = await sb.from("wa_optout").select("phone").eq("phone", normMobile(target)).maybeSingle().then((x) => x, () => ({}));
   if (opt) return { ok: false, err: "This client replied STOP — alerts to this number are switched off" };
+  if (!hasRealChange(p)) return { ok: false, err: "Old and new timings are the same — there is no change to tell the client" };
   // Last check before the client sees it: a leg without its old timing gets it from the ticket on file
   if ((p.segments || []).some((x) => !(x.old && (x.old.dep || x.old.date)))) {
     const { data: bk2 } = await sb.from("bookings").select("segments").eq("agency_id", al.agency_id).eq("pnr", al.pnr).maybeSingle();
@@ -765,6 +774,13 @@ async function handleParsed(agency, parsed, subject, messageId) {
         parsed.clientMobile = b.mobile || null;
         enrichOldTiming(parsed, b.segments);
       }
+    }
+    // Old and new identical on every leg → nothing for the client; tell the operator instead of alerting
+    if (!hasRealChange(parsed)) {
+      await logMail(agency.id, messageId, subject, "nochange", `${parsed.pnr || ""} — change mail, but timings identical`);
+      await adminCard(`ℹ️ <b>CHANGE MAIL WITHOUT A VISIBLE CHANGE</b> · ${tag}\n🎫 ${esc(parsed.pnr || "no PNR")} — flight, date and times are the same as the ticket. Not sent to the client.\n<i>${esc(subject)}</i>\nIf something else changed (terminal, aircraft), check the mail.`).catch(() => {});
+      console.log(`[nochange] ${agency.slug} ${parsed.pnr}: old == new, no alert`);
+      return;
     }
     // Duplicate = same PNR + same change type + identical old/new flight details.
     // A different timing for the same PNR is a NEW change and must alert.
@@ -1314,8 +1330,12 @@ function diffItinerary(oldSegs, newSegs) {
   if (!oldSegs.length || !newSegs.length) return null;
   const used = new Set(); const out = []; let changed = false;
   for (const n of newSegs) {
-    let oi = oldSegs.findIndex((o, i) => !used.has(i) && ns(o.sector) && ns(o.sector) === ns(n.sector));
-    if (oi < 0) oi = oldSegs.findIndex((o, i) => !used.has(i) && nf(o.flight) && nf(o.flight) === nf(n.flight));
+    // Pair legs carefully: same route+flight+date first (bookings can fly the same route twice), then route+flight, route, flight
+    const free = (i) => !used.has(i);
+    let oi = oldSegs.findIndex((o, i) => free(i) && ns(o.sector) === ns(n.sector) && nf(o.flight) === nf(n.flight) && o.date === n.date);
+    if (oi < 0) oi = oldSegs.findIndex((o, i) => free(i) && ns(o.sector) && ns(o.sector) === ns(n.sector) && nf(o.flight) && nf(o.flight) === nf(n.flight));
+    if (oi < 0) oi = oldSegs.findIndex((o, i) => free(i) && ns(o.sector) && ns(o.sector) === ns(n.sector));
+    if (oi < 0) oi = oldSegs.findIndex((o, i) => free(i) && nf(o.flight) && nf(o.flight) === nf(n.flight));
     if (oi < 0) { out.push({ sector: n.sector, status: "CHANGED", old: null, new: n }); changed = true; continue; }
     used.add(oi);
     const o = oldSegs[oi];

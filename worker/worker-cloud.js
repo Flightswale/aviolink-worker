@@ -213,10 +213,28 @@ async function sendWhatsAppTemplate(toMobile, name, params) {
   } catch (e) { return { ok: false, err: e.message }; }
 }
 let V2_OFF_UNTIL = 0;
+// v3: phone-friendly layout (header, bold labels, ❌ old / ✅ new). Same parameters as v2. Used once Meta approves it.
+const V3_TEXT = (() => {
+  const leg = (n, a, b) => `*{{${n}}}*\n\u274C ${a}: {{${n + 1}}}\n\u2705 ${b}: {{${n + 2}}}`;
+  const head = (what) => `Dear {{1}},\n\nThe airline has ${what}.\n\n*PNR:* {{2}}\n*Airline:* {{3}}\n\n`;
+  const tail = (n) => `\n\nFor any help, please contact *{{${n}}}* at {{${n + 1}}}.`;
+  return {
+    flight_change_1leg: { header: "Flight schedule change", body: head("changed your flight booking") + leg(4, "Old", "New") + tail(7) },
+    flight_change_2leg: { header: "Flight schedule change", body: head("changed your flight booking") + leg(4, "Old", "New") + "\n\n" + leg(7, "Old", "New") + tail(10) },
+    flight_cancel_1leg: { header: "Flight cancellation", body: head("cancelled a flight in your booking") + leg(4, "Cancelled", "Alternative") + tail(7) },
+    flight_cancel_2leg: { header: "Flight cancellation", body: head("cancelled flights in your booking") + leg(4, "Cancelled", "Alternative") + "\n\n" + leg(7, "Cancelled", "Alternative") + tail(10) },
+  };
+})();
+const v3Ready = (name) => Boolean(WA_TPL_STATE && WA_TPL_STATE[`${name}_v3`] === "APPROVED");
 // One entry point: template when enabled (works any time), plain text as fallback (works inside a 24 h window).
 async function deliverClientWhatsApp(target, payload, agency, text) {
   if (process.env.WA_USE_TEMPLATES === "1" && payload && payload.pnr) {
     const v2 = Date.now() > V2_OFF_UNTIL ? templateV2For(payload, agency) : null;
+    if (v2 && v3Ready(v2.name)) {
+      const r3 = await sendWhatsAppTemplate(target, `${v2.name}_v3`, v2.params);
+      if (r3.ok) return { ...r3, via: `template ${v2.name}_v3` };
+      console.error("[wa-template v3]", r3.err);
+    }
     if (v2) {
       const r = await sendWhatsAppTemplate(target, v2.name, v2.params);
       if (r.ok) return { ...r, via: `template ${v2.name}` };
@@ -241,6 +259,11 @@ function clientPreviewText(payload, agency) {
   const v2 = templateV2For(p, agency);
   const L = (a, b, c, l1, l2) => `\u2708\uFE0F ${a}\n${l1}: ${b}\n${l2}: ${c}`;
   const tail = (n, ph) => `\n\nFor any queries, please contact ${n} at ${ph}. Thank you.`;
+  if (v2 && v3Ready(v2.name)) {
+    const t3 = V3_TEXT[v2.name];
+    let body = t3.body; v2.params.forEach((x, i) => { body = body.split(`{{${i + 1}}}`).join(x); });
+    return `*${t3.header}*\n\n${body}\n\nReply STOP to stop flight alerts\n[ Stop alerts ]`;
+  }
   if (v2) {
     const q = v2.params, cancel = v2.name.startsWith("flight_cancel");
     const head = `Dear ${q[0]},\n\nThe airline has ${cancel ? (v2.name.endsWith("2leg") ? "cancelled flights in" : "cancelled a flight in") : "changed the schedule of"} your booking PNR ${q[1]} with ${q[2]}.\n\n`;
@@ -424,6 +447,28 @@ async function pollTelegram() {
       await tg("sendMessage", { chat_id: u.message.chat.id, text: cmd === "buildtests" ? "🧪 Collecting real airline mails from Gmail for the test set… (a few minutes)" : cmd === "selftest" ? "🧪 Re-reading every test mail with the current code… (a few minutes)" : "🧪 Updating expected results…" });
       const job = cmd === "buildtests" ? SELFTEST.build("") : cmd === "selftest" ? SELFTEST.run("on request") : SELFTEST.acceptAll();
       job.catch((e) => adminCard(`🧪 ${cmd} failed: ${esc(e.message)}`));
+      continue;
+    }
+    if (txt.startsWith("/watemplates3")) {
+      const waba = process.env.WA_WABA_ID || "2690954148013574";
+      const H = { authorization: `Bearer ${WA.token}`, "content-type": "application/json" };
+      const ex = { change1: ["Mr Allen Singh", "9FNVIG", "Air India (AI)", "MAA \u2192 DEL", "AI 538 \u00b7 25 Nov \u00b7 20:00-22:45", "AI 538 \u00b7 1 Dec \u00b7 20:00-22:45 (new date)"],
+        leg2: ["DEL \u2192 MAA", "AI 539 \u00b7 30 Nov \u00b7 06:00-08:50", "AI 539 \u00b7 3 Dec \u00b7 06:00-08:50 (new date)"],
+        cancel1: ["Mr Allen Singh", "9FNVIG", "Air India (AI)", "MAA \u2192 DEL", "AI 538 \u00b7 25 Nov \u00b7 20:00-22:45", "AI 540 \u00b7 25 Nov \u00b7 22:30-01:15"],
+        cleg2: ["DEL \u2192 MAA", "AI 539 \u00b7 30 Nov \u00b7 06:00-08:50", "Not offered by the airline - full refund applicable"], ag: ["Finch Travels", "+91 95032 55845"] };
+      const exFor = { flight_change_1leg: [...ex.change1, ...ex.ag], flight_change_2leg: [...ex.change1, ...ex.leg2, ...ex.ag], flight_cancel_1leg: [...ex.cancel1, ...ex.ag], flight_cancel_2leg: [...ex.cancel1, ...ex.cleg2, ...ex.ag] };
+      const out = [];
+      for (const [base, t] of Object.entries(V3_TEXT)) {
+        const body = { name: `${base}_v3`, language: "en", category: "UTILITY", components: [
+          { type: "HEADER", format: "TEXT", text: t.header },
+          { type: "BODY", text: t.body, example: { body_text: [exFor[base]] } },
+          { type: "FOOTER", text: "Reply STOP to stop flight alerts" },
+          { type: "BUTTONS", buttons: [{ type: "QUICK_REPLY", text: "Stop alerts" }] } ] };
+        const r = await fetch(`https://graph.facebook.com/v20.0/${waba}/message_templates`, { method: "POST", headers: H, body: JSON.stringify(body) }).then((x) => x.json()).catch((e) => ({ error: { message: e.message } }));
+        out.push(r.id ? `\u2705 ${base}_v3: submitted (${r.status || "PENDING"})` : `\u274c ${base}_v3: ${r.error?.error_user_msg || r.error?.message || JSON.stringify(r).slice(0, 200)}`);
+      }
+      await adminCard(`📋 <b>New WhatsApp layout submitted</b>\n${out.map(esc).join("\n")}\n\nThe new layout is used automatically once Meta approves (you will get a message here). Until then the current one keeps working.`);
+      setTimeout(() => waQualityWatch(true).catch(() => {}), 10 * 60000);
       continue;
     }
     if (txt.startsWith("/watemplates")) {
@@ -1394,7 +1439,8 @@ let lastReportDay = "";
 // WhatsApp health: warn the moment quality / limit / status / name changes
 let WA_HEALTH = null, waHealthAt = 0, WA_TPL_STATE = null;
 async function waQualityWatch(force = false) {
-  if (!WA.enabled() || (!force && Date.now() - waHealthAt < 3600000)) return;
+  const v3Pending = WA_TPL_STATE && Object.entries(WA_TPL_STATE).some(([k, v]) => k.endsWith("_v3") && v === "PENDING");
+  if (!WA.enabled() || (!force && Date.now() - waHealthAt < (v3Pending ? 600000 : 3600000))) return;
   waHealthAt = Date.now();
   try {
     const r = await fetch(`https://graph.facebook.com/v20.0/${WA.phoneId}?fields=quality_rating,messaging_limit_tier,status,name_status`, { headers: { authorization: `Bearer ${WA.token}` } });

@@ -165,7 +165,8 @@ function clientName(p) {
 function legShort(l) {
   if (!l) return "";
   const d = l.date && /^\d{4}-\d{2}-\d{2}$/.test(l.date) ? `${Number(l.date.slice(8))} ${MON3[Number(l.date.slice(5, 7)) - 1]}` : (l.date || "");
-  return [l.flight, d, `${l.dep || "--:--"}-${l.arr || "--:--"}${l.arrDayOffset ? " (+" + l.arrDayOffset + ")" : ""}`].filter(Boolean).join(" · ");
+  const t = l.dep && l.arr ? `${l.dep}-${l.arr}${l.arrDayOffset ? " (+" + l.arrDayOffset + ")" : ""}` : l.dep ? `departs ${l.dep}` : l.arr ? `arrives ${l.arr}` : "";
+  return [l.flight, d, t].filter(Boolean).join(" · ");
 }
 function templateV2For(p, agency) {
   const legs = clientLegs(p);

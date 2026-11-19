@@ -110,7 +110,9 @@ function when(t) {
   return d.toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 function dmy(s) { if (!s || !/^\d{4}-\d{2}-\d{2}/.test(s)) return s || ""; return Number(s.slice(8, 10)) + " " + MON[Number(s.slice(5, 7)) - 1]; }
-function legTxt(l) { if (!l) return ""; return [l.flight, dmy(l.date), (l.dep || "--:--") + "–" + (l.arr || "--:--") + (l.arrDayOffset ? " (+" + l.arrDayOffset + ")" : "")].filter(Boolean).join(" · "); }
+function legTxt(l) { if (!l) return "";
+  const t = l.dep && l.arr ? `${l.dep}–${l.arr}${l.arrDayOffset ? " (+" + l.arrDayOffset + ")" : ""}` : l.dep ? `departs ${l.dep} (arrival not given)` : l.arr ? `arrives ${l.arr} (departure not given)` : "time not given by airline";
+  return [l.flight, dmy(l.date), t].filter(Boolean).join(" · "); }
 function title(n) { return String(n || "").toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()); }
 
 // ---------- login ----------
@@ -211,7 +213,15 @@ async function render() {
 }
 
 // ---------- alerts ----------
+const TODAY_IST = () => new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+function flown(a) {
+  const ds = ((a.payload || {}).segments || []).map((s) => (s.new || s.old || {}).date).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d || ""));
+  return ds.length > 0 && ds.every((d) => d < TODAY_IST());
+}
 function bucket(a) {
+  if (["sent", "delivered", "read"].includes(a.client_status) || ["sent", "delivered"].includes(a.status)) return "sent";
+  if (a.client_status === "ignored" || a.status === "skipped") return "ignored";
+  if (flown(a)) return "past";
   if (a.status === "awaiting_data") return "waiting";
   if (["sent", "delivered", "read"].includes(a.client_status)) return "sent";
   if (a.client_status === "ignored" || a.status === "skipped") return "ignored";
@@ -231,10 +241,16 @@ async function vAlerts(m) {
   const all = ME.admin && !ME.actAs;
   const list = await api("/api/alerts" + (all ? "?all=1" : ""));
   CACHE.alerts = list;
-  const cnt = (k) => list.filter((a) => bucket(a) === k).length;
+  // Same PNR + same new timings received twice (airlines often mail twice) → show once
+  const seen = new Map();
+  for (const a of list) {
+    const k = (a.agency_id || "") + "|" + (a.pnr || a.id) + "|" + JSON.stringify(((a.payload || {}).segments || []).map((s) => { const l = s.new || s.old || {}; return [s.status, l.flight, l.date, l.dep]; }));
+    if (seen.has(k)) { const first = seen.get(k); first._dups = (first._dups || 0) + 1; a._dupOf = first.id; } else seen.set(k, a);
+  }
+  const cnt = (k) => list.filter((a) => !(a._dupOf && bucket(a) !== "sent") && bucket(a) === k).length;
   const badge = $("#b-alerts"); if (badge) { const n = cnt("tosend"); badge.hidden = !n; badge.textContent = n; }
-  const F = [["tosend", "To send"], ["waiting", "Waiting for ticket"], ["sent", "Sent"], ["ignored", "Ignored"], ["all", "All"]];
-  const shown = list.filter((a) => FILTER === "all" || bucket(a) === FILTER);
+  const F = [["tosend", "To send"], ["waiting", "Waiting for ticket"], ["sent", "Sent"], ["past", "Past flights"], ["ignored", "Ignored"], ["all", "All"]];
+  const shown = list.filter((a) => !(a._dupOf && bucket(a) !== "sent") && (FILTER === "all" || bucket(a) === FILTER));
   m.innerHTML = actAsBanner() + `<h1>${all ? "All alerts" : "Alerts"}</h1><p class="sub">Schedule changes and cancellations from the last 60 days.${all ? " Every agency." : " Check the details, then send to your client on WhatsApp."}</p>
     <div class="chips">${F.map(([k, t]) => `<button class="chip ${FILTER === k ? "on" : ""}" data-f="${k}">${t}<b>${k === "all" ? list.length : cnt(k)}</b></button>`).join("")}</div>
     <div id="alist">${shown.length ? shown.map((a) => alertCard(a, all)).join("") : `<div class="card empty">${FILTER === "tosend" ? "Nothing waiting. New changes will appear here." : "No alerts here."}</div>`}</div>`;
@@ -255,6 +271,7 @@ function alertCard(a, showAgency) {
   return `<div class="card"><div class="row"><span class="pnr">${h(a.pnr || "No PNR")}</span>
       <span class="pill ${cancel ? "p-bad" : "p-warn"}">${cancel ? "Cancellation" : "Schedule change"}</span>${statusPill(a)}
       ${showAgency ? `<span class="pill p-info">🏢 ${h(a.agency)}</span>` : ""}<span class="mut" style="margin-left:auto">${when(a.created_at)}</span></div>
+    ${a._dups ? `<div class="mut" style="margin-top:6px">The airline sent this same change ${a._dups + 1} times — shown once.</div>` : ""}
     <div style="margin-top:8px">👤 ${pax.length ? h(pax.join(", ")) : `<span class="mut">Passenger names not yet available</span>`}${p.airline ? ` · <span class="mut">${h(p.airline)}</span>` : ""}</div>
     <div class="legs">${legs || `<span class="mut">No flight details</span>`}</div>
     ${a.client_status === "failed" ? `<div class="err" style="margin:0 0 10px">WhatsApp not delivered${a.wa_error ? ": " + h(a.wa_error) : ""}. Check the number and send again.</div>` : ""}

@@ -230,6 +230,15 @@ async function sendAlertToClient(alertId, { mobile = null, actor = "telegram", f
   if (!target) return { ok: false, err: "No client mobile on file — enter it" };
   const { data: opt } = await sb.from("wa_optout").select("phone").eq("phone", normMobile(target)).maybeSingle().then((x) => x, () => ({}));
   if (opt) return { ok: false, err: "This client replied STOP — alerts to this number are switched off" };
+  // Last check before the client sees it: a leg without its old timing gets it from the ticket on file
+  if ((p.segments || []).some((x) => !(x.old && (x.old.dep || x.old.date)))) {
+    const { data: bk2 } = await sb.from("bookings").select("segments").eq("agency_id", al.agency_id).eq("pnr", al.pnr).maybeSingle();
+    if (bk2?.segments?.length && enrichOldTiming(p, bk2.segments)) {
+      const m2 = compile(p, { name: ag?.name, phone: ag?.owner_phone || ag?.whatsapp || "" });
+      al.compiled_whatsapp = m2.whatsapp;
+      await sb.from("alerts").update({ payload: p, compiled_whatsapp: m2.whatsapp }).eq("id", al.id).then(() => {}, () => {});
+    }
+  }
   const r = await deliverClientWhatsApp(target, p, ag, al.compiled_whatsapp);
   const now = new Date().toISOString();
   if (r.ok) {
@@ -660,7 +669,7 @@ async function handleParsed(agency, parsed, subject, messageId) {
 
   if (parsed.kind === "SCHEDULE_CHANGE" && (parsed.segments || []).length) {
     if (parsed.pnr) {
-      const { data: b } = await sb.from("bookings").select("passengers,mobile").eq("agency_id", agency.id).eq("pnr", parsed.pnr).maybeSingle();
+      const { data: b } = await sb.from("bookings").select("passengers,mobile,segments").eq("agency_id", agency.id).eq("pnr", parsed.pnr).maybeSingle();
       if (b) {
         if ((!parsed.passengers || !parsed.passengers.length) && b.passengers?.length) parsed.passengers = b.passengers;
         parsed.clientMobile = b.mobile || null;

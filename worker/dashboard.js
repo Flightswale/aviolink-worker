@@ -248,6 +248,25 @@ module.exports = function makeDashboard(ctx) {
       res.writeHead(302, { location: gmail.authUrl(ag) }); res.end(); return true;
     }
 
+    // GST invoices (own agency; admin sees all)
+    if (p === "/api/invoices" && ctx.invoices) {
+      const ag = scope(sess, u);
+      let q = sb.from("invoices").select("id,invoice_no,issued_at,total,agency_id,buyer_name").order("issued_at", { ascending: false }).limit(200);
+      if (ag) q = q.eq("agency_id", ag);
+      const { data, error } = await q;
+      if (error) return json(res, 200, []), true;
+      return json(res, 200, data || []), true;
+    }
+    const invM = p.match(/^\/api\/invoices\/(\d+)\/pdf$/);
+    if (invM && ctx.invoices) {
+      const { data: inv } = await sb.from("invoices").select("*").eq("id", Number(invM[1])).maybeSingle();
+      const ag = sess.actAs || sess.agencyId;
+      if (!inv || (!sess.admin && inv.agency_id !== ag)) return json(res, 404, { error: "not found" }), true;
+      const buf = await ctx.invoices.pdf(inv);
+      res.writeHead(200, { "content-type": "application/pdf", "content-disposition": `attachment; filename="Aviolink-Invoice-${inv.invoice_no.replace(/\//g, "-")}.pdf"`, "cache-control": "no-store" });
+      res.end(buf); return true;
+    }
+
     // Settings
     if (p === "/api/billing/subscribe" && req.method === "POST") {
       const ag = sess.actAs || sess.agencyId;

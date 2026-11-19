@@ -359,6 +359,7 @@ async function pollTelegram() {
     }
     if (txt.startsWith("/billing")) { await adminCard(`💳 <b>BILLING CHECK</b>\n${esc(await BILLING.check())}\n\nWebhook URL in Razorpay must be: https://api.aviolink.in/webhook/razorpay`); continue; }
     if (txt.startsWith("/marketing")) { try { await weeklyMarketing(true); } catch (e) { await adminCard(`📣 Marketing post failed: ${esc(e.message)}`); } continue; }
+    if (txt.startsWith("/gst")) { const mm = (txt.match(/\d{4}-\d{2}/) || [])[0]; try { await gstMonthly(true, mm || new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 7)); } catch (e) { await adminCard(`📒 GST register failed: ${esc(e.message)}`); } continue; }
     if (txt.startsWith("/proof")) {
       const [, d, s] = txt.split(/\s+/);
       try { await adminCard(await proofReport(Math.min(365, Number(d) || 30), s || "")); }
@@ -1475,7 +1476,7 @@ async function trialReminders() {
     const key = step && `${String(a.paid_until).slice(0, 10)}:${step}`;
     if (!step || a.renew_reminder === key || (step === "5days" && String(a.renew_reminder || "").startsWith(String(a.paid_until).slice(0, 10) + ":1day"))) continue;
     if (step === "ended" && left < -3) continue; // stop after a few days
-    const end = new Date(a.paid_until).toLocaleDateString("en-IN", { day: "numeric", month: "long" });
+    const end = new Date(a.paid_until).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "long" });
     await adminCard(`${step === "ended" ? "⌛ <b>PLAN EXPIRED</b>" : `🔔 <b>PAYMENT DUE IN ${left} DAY${left === 1 ? "" : "S"}</b>`} · 🏢 ${esc(a.name)}\n👤 ${esc(a.contact_name || "-")} · 📞 ${esc(a.whatsapp || a.owner_phone || "-")}\nValid till ${end}. Reminder mail sent.`).catch(() => {});
     const m = getSupportMailer();
     if (m && a.notify_email) {
@@ -1521,12 +1522,55 @@ async function weeklyMarketing(force = false) {
   await adminCard(`📣 <b>WEEKLY MARKETING POSTS</b> — copy, check, share\n\n<b>1) WhatsApp groups / Status:</b>\n<pre>${esc(wa)}</pre>\n<b>2) LinkedIn / Facebook:</b>\n<pre>${esc(li)}</pre>\nNumbers are from the last 7 days, no agency or client names included.${newsLine}`);
 }
 
+// ---------- GST invoices ----------
+const INVOICES = require("./invoice")({ sb });
+async function tgDoc(filename, buf, caption, type = "application/pdf") {
+  const fd = new FormData();
+  fd.append("chat_id", String(CFG.tgChat)); if (caption) { fd.append("caption", caption); fd.append("parse_mode", "HTML"); }
+  fd.append("document", new Blob([buf], { type }), filename);
+  const r = await fetch(`${TG}/sendDocument`, { method: "POST", body: fd }).then((x) => x.json()).catch((e) => ({ ok: false, description: e.message }));
+  if (!r.ok) console.error("Telegram sendDocument:", r.description);
+  return r;
+}
+const invFile = (inv) => `Aviolink-Invoice-${inv.invoice_no.replace(/\//g, "-")}.pdf`;
+async function issueInvoice(agencyId, pay, from, to) {
+  const { data: a } = await sb.from("agencies").select("*").eq("id", agencyId).maybeSingle();
+  if (!a) return;
+  const inv = await INVOICES.create({ ...a, _from: from?.toISOString(), _to: to?.toISOString() }, pay);
+  const buf = await INVOICES.pdf(inv);
+  await tgDoc(invFile(inv), buf, `🧾 <b>GST invoice ${esc(inv.invoice_no)}</b> · 🏢 ${esc(a.name)} · ₹${Number(inv.total).toLocaleString("en-IN")}`);
+  const m = getSupportMailer();
+  if (m && a.notify_email && !inv.mailed_at) {
+    await m.sendMail({ from: `"Aviolink" <${SUPPORT_GMAIL.email}>`, to: a.notify_email, bcc: SUPPORT_GMAIL.email, subject: `Aviolink tax invoice ${inv.invoice_no}`,
+      html: `<div style="font-family:Arial,sans-serif;max-width:560px;color:#141B4D;line-height:1.55"><p>Hi ${esc(a.contact_name || a.name)},</p><p>Thank you for your payment of <b>₹${Number(inv.total).toLocaleString("en-IN")}</b>. Your GST tax invoice <b>${esc(inv.invoice_no)}</b> is attached.</p><p>Your alerts are active till <b>${to.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "long", year: "numeric" })}</b>. You can also download all invoices from Settings in your dashboard.</p><p>Team Aviolink · <a href="https://aviolink.in">aviolink.in</a></p></div>`,
+      attachments: [{ filename: invFile(inv), content: buf, contentType: "application/pdf" }] });
+    await sb.from("invoices").update({ mailed_at: new Date().toISOString() }).eq("id", inv.id);
+  }
+}
+// 1st of every month, 10 AM IST: last month's invoice register (for GSTR-1) to Telegram + support mailbox
+async function gstMonthly(force, monthArg) {
+  const ist = new Date(Date.now() + 5.5 * 3600000);
+  if (!force && !(ist.getUTCDate() === 1 && ist.getUTCHours() === 10)) return;
+  const prev = new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth() - 1, 1));
+  const month = monthArg || prev.toISOString().slice(0, 7);
+  if (!force) {
+    const { data } = await sb.from("app_settings").select("value").eq("key", "gst_register_sent").maybeSingle();
+    if (data?.value === month) return;
+    await sb.from("app_settings").upsert({ key: "gst_register_sent", value: month }, { onConflict: "key" });
+  }
+  const r = await INVOICES.register(month);
+  const name = `Aviolink-GST-register-${month}.csv`;
+  await tgDoc(name, Buffer.from(r.csv), `📒 <b>GST register ${month}</b>: ${r.count} invoice(s) · total ₹${r.total.toLocaleString("en-IN")} · GST ₹${r.tax.toLocaleString("en-IN")}\nGive this file to your CA for GSTR-1 / GSTR-3B (SAC ${INVOICES.SAC}).`, "text/csv");
+  const m = getSupportMailer();
+  if (m && !force) await m.sendMail({ to: SUPPORT_GMAIL.email, subject: `Aviolink GST register ${month}`, text: `${r.count} invoices, total ₹${r.total}, GST ₹${r.tax}. File attached for GSTR-1 / GSTR-3B.`, attachments: [{ filename: name, content: r.csv, contentType: "text/csv" }] }).catch(() => {});
+}
+
 // ---------- HTTP: OAuth callback + health ----------
 let DASH = null, BILLING = null;
 const NEWS = require("./news")({ sb, airlineName, tips: TIPS });
 function startHttp() {
-  BILLING = require("./billing")({ sb, adminCard, esc, loadAgencies });
-  DASH = require("./dashboard")({ billing: BILLING, sb, gmail, getAgencies: () => AGENCIES, defaultAgencyId: () => DEFAULT_AGENCY?.id, sendSignupWelcome, loadAgencies, GMAIL_HEALTH, sendAlertToClient, adminCard, esc, waEnabled: () => WA.enabled() });
+  BILLING = require("./billing")({ sb, adminCard, esc, loadAgencies, onPaid: issueInvoice });
+  DASH = require("./dashboard")({ billing: BILLING, sb, gmail, getAgencies: () => AGENCIES, defaultAgencyId: () => DEFAULT_AGENCY?.id, sendSignupWelcome, loadAgencies, GMAIL_HEALTH, sendAlertToClient, adminCard, esc, waEnabled: () => WA.enabled(), invoices: INVOICES });
   const port = Number(process.env.PORT || 8080);
   const site = (process.env.SITE_URL || "https://aviolink.in").replace(/\/$/, "");
   http.createServer(async (req, res) => {
@@ -1663,7 +1707,7 @@ Reason: ${esc(why)}`);
   };
   const tgLoop = async () => { try { await pollTelegram(); } catch (e) { console.error("[tg-error]", e.message); } setTimeout(tgLoop, 3000); };
   const agLoop = async () => { try { await loadAgencies(); await sendWelcomes(); } catch (_) {} setTimeout(agLoop, 120000); };
-  const wdLoop = async () => { try { await watchdog(); await nightlyReport(); await waQualityWatch(); await weeklyMarketing(); await trialReminders(); } catch (e) { console.error("[watchdog]", e.message); } setTimeout(wdLoop, 60000); };
+  const wdLoop = async () => { try { await watchdog(); await nightlyReport(); await waQualityWatch(); await weeklyMarketing(); await trialReminders(); await gstMonthly(); } catch (e) { console.error("[watchdog]", e.message); } setTimeout(wdLoop, 60000); };
   setTimeout(wdLoop, 60000);
   setTimeout(() => NEWS.catchUp().then((n) => { if (n) console.log(`[news] ${n} weekly report(s) saved`); return NEWS.pingAll(); })
     .then((st) => console.log(`[indexnow] ping status ${st}`)).catch((e) => console.error("[news]", e.message)), 180000);

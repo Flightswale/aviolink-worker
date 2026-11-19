@@ -36,3 +36,8 @@ alter table payments enable row level security;
 alter table agencies add column if not exists renew_reminder text;
 create table if not exists weekly_news (week date primary key, data jsonb, created_at timestamptz default now());
 alter table weekly_news enable row level security;
+create table if not exists invoices (id bigserial primary key, invoice_no text unique, fy text, seq int, payment_id text unique, agency_id text, issued_at timestamptz,
+  buyer_name text, buyer_gstin text, buyer_address text, buyer_email text, place_of_supply text, sac text, period_from timestamptz, period_to timestamptz,
+  taxable numeric, cgst numeric, sgst numeric, igst numeric, total numeric, method text, mailed_at timestamptz, created_at timestamptz default now());
+create unique index if not exists invoices_fy_seq on invoices (fy, seq);
+alter table invoices enable row level security;

@@ -339,7 +339,10 @@ function vSettings(m) {
       <div class="field"><label>Team logins</label><input id="s-team" value="${h((a.login_emails || []).join(", "))}" placeholder="staff1@gmail.com, staff2@gmail.com"><small>Other Google emails allowed to open this dashboard. ${h(a.gmail?.email || "")} can always log in.</small></div>
       <div class="field"><label>Plan</label><div>${a.plan === "trial" ? `Free trial${a.trial_ends_at ? " — ends " + new Date(a.trial_ends_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : ""}<div style="margin-top:8px"><button class="btn green" data-subscribe>Pay for 1 month${a.price ? " · ₹" + Number(a.price).toLocaleString("en-IN") : ""}</button></div><small class="mut">UPI, card or net banking · one month at a time · no auto-debit</small>` : a.plan === "paid" ? `Paid${a.paid_until ? " — valid till " + new Date(a.paid_until).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : ""}<div style="margin-top:8px"><button class="btn green" data-subscribe>Pay for next month${a.price ? " · ₹" + Number(a.price).toLocaleString("en-IN") : ""}</button></div><small class="mut">Adds 1 month after your current expiry · no auto-debit</small>` : h(a.plan || "-")}</div></div>
     </div></div>
-    <button class="btn pri" id="s-save">Save settings</button>`;
+    <button class="btn pri" id="s-save">Save settings</button>
+    <div class="card" style="margin-top:20px"><b>GST invoices</b><div id="s-inv" class="mut" style="margin-top:8px">Loading…</div></div>`;
+  api("/api/invoices").then((L) => { const el = $("#s-inv"); if (!el) return;
+    el.innerHTML = L.length ? `<div class="tablewrap"><table><tr><th>Invoice</th><th>Date</th><th>Amount</th><th></th></tr>${L.map((i) => `<tr><td>${h(i.invoice_no)}</td><td>${new Date(i.issued_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</td><td>₹${Number(i.total).toLocaleString("en-IN")}</td><td><a href="/api/invoices/${i.id}/pdf">Download PDF</a></td></tr>`).join("")}</table></div>` : "No invoices yet. An invoice is emailed to you after every payment."; }).catch(() => { const el = $("#s-inv"); if (el) el.textContent = "Could not load invoices."; });
   $("#s-save").onclick = async () => {
     const btn = $("#s-save"); btn.disabled = true;
     try {

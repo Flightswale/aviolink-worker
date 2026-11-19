@@ -10,7 +10,7 @@
 const crypto = require("crypto");
 const DAY = 86400000;
 
-module.exports = function makeBilling({ sb, adminCard, esc, loadAgencies }) {
+module.exports = function makeBilling({ sb, adminCard, esc, loadAgencies, onPaid }) {
   const KEY = process.env.RAZORPAY_KEY_ID || "", SECRET = process.env.RAZORPAY_KEY_SECRET || "", WH = process.env.RAZORPAY_WEBHOOK_SECRET || "";
   const PRICE = Math.round(Number(process.env.AVIOLINK_PRICE || 2359));
   const enabled = () => Boolean(KEY && SECRET);
@@ -51,7 +51,8 @@ module.exports = function makeBilling({ sb, adminCard, esc, loadAgencies }) {
     const until = new Date(base + 30 * DAY).toISOString();
     await sb.from("agencies").update({ plan: "paid", paid_until: until, status: "active", trial_reminder: null }).eq("id", agencyId);
     await loadAgencies();
-    await adminCard(`💰 <b>PAYMENT RECEIVED</b> · 🏢 ${esc(a.name)}\n₹${((pay.amount || 0) / 100).toLocaleString("en-IN")} · ${esc(pay.method || "")}\nValid till ${new Date(until).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}. Reminder goes 5 days before expiry.`).catch(() => {});
+    if (onPaid) Promise.resolve().then(() => onPaid(agencyId, pay, new Date(base), new Date(until))).catch((e) => console.error("[billing] onPaid", e.message));
+    await adminCard(`💰 <b>PAYMENT RECEIVED</b> · 🏢 ${esc(a.name)}\n₹${((pay.amount || 0) / 100).toLocaleString("en-IN")} · ${esc(pay.method || "")}\nValid till ${new Date(until).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })}. Reminder goes 5 days before expiry.`).catch(() => {});
     return until;
   }
 
@@ -89,7 +90,7 @@ ${done ? `<p>✅ This payment is already done. Thank you!</p><p><a href="https:/
         if (o.notes?.agency_id && ["captured", "authorized"].includes(pay.status)) until = (await applyPayment(o.notes.agency_id, pay)) || null;
       } catch (e) { console.error("[billing] payDone", e.message); }
     }
-    const till = until ? new Date(until).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" }) : null;
+    const till = until ? new Date(until).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "long", year: "numeric" }) : null;
     return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aviolink</title></head>
 <body style="font-family:system-ui,sans-serif;background:#F3F5FB;color:#141B4D;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:16px">
 <div style="background:#fff;border-radius:18px;padding:32px;max-width:420px;text-align:center">${ok ? `<h1>✅ Payment successful</h1><p>Thank you! Your alerts are active${till ? ` till <b>${till}</b>` : ""}. Razorpay emails you the receipt. We will remind you 5 days before the next payment.</p>` : `<h1>Payment not completed</h1><p>Nothing was charged. <a href="${payUrl(h(orderId))}">Try again</a> or WhatsApp +91 95032 55845.</p>`}
@@ -121,11 +122,11 @@ ${done ? `<p>✅ This payment is already done. Thank you!</p><p><a href="https:/
       await sb.from("agencies").update({ plan: "paid", paid_until: until, status: "active", trial_reminder: null, rzp_subscription_id: sub.id }).eq("id", agencyId);
       await loadAgencies();
       if (ev.event === "subscription.charged") {
-        await adminCard(`💰 <b>PAYMENT RECEIVED</b> · 🏢 ${esc(a.name)}\n₹${((pay.amount || 0) / 100).toLocaleString("en-IN")} · ${esc(pay.method || "")}\nValid till ${new Date(until).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })} — renews automatically.`);
+        await adminCard(`💰 <b>PAYMENT RECEIVED</b> · 🏢 ${esc(a.name)}\n₹${((pay.amount || 0) / 100).toLocaleString("en-IN")} · ${esc(pay.method || "")}\nValid till ${new Date(until).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })} — renews automatically.`);
       }
     } else if (["subscription.halted", "subscription.cancelled", "subscription.paused", "subscription.pending"].includes(ev.event)) {
       const what = { "subscription.halted": "renewal FAILED (Razorpay stopped retrying)", "subscription.cancelled": "subscription CANCELLED", "subscription.paused": "subscription PAUSED", "subscription.pending": "renewal payment failed — Razorpay is retrying" }[ev.event];
-      await adminCard(`⚠️ <b>BILLING</b> · 🏢 ${esc(a.name)}: ${what}.\nAlerts continue until ${a.paid_until ? new Date(a.paid_until).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "the paid period ends"}, then pause. Good moment to call them.`);
+      await adminCard(`⚠️ <b>BILLING</b> · 🏢 ${esc(a.name)}: ${what}.\nAlerts continue until ${a.paid_until ? new Date(a.paid_until).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short" }) : "the paid period ends"}, then pause. Good moment to call them.`);
     }
     return { ok: true };
   }

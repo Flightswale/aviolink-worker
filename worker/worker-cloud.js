@@ -124,7 +124,21 @@ function legText(sector, l) {
   return [l.flight, String(sector || "").replace(/\s*(→|->)\s*/, "-"), d, `${l.dep || "--:--"}-${l.arr || "--:--"}${l.arrDayOffset ? " (+" + l.arrDayOffset + ")" : ""}`].filter(Boolean).join(" ");
 }
 const clean = (s, max = 300) => (String(s || "").replace(/[\r\n\t]+/g, " ").replace(/ {4,}/g, "   ").trim().slice(0, max)) || "-";
-function titleName(n) { return String(n || "").toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()).replace(/\s+/g, " ").trim(); }
+// Airline style "SINGH/ALLEN MR" or "SINGH ALLEN MR" → "Mr Allen Singh"; plain names ("Archana Hemant Navghare") unchanged
+const TITLES = { MR: "Mr", MRS: "Mrs", MS: "Ms", MISS: "Miss", MSTR: "Master", MASTER: "Master", DR: "Dr", PROF: "Prof", CAPT: "Capt" };
+function titleName(n) {
+  let raw = String(n || "").replace(/\s+/g, " ").trim();
+  const cap = (x) => x.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
+  let title = "";
+  const tm = raw.match(/[\s/.]+(MR|MRS|MS|MISS|MSTR|MASTER|DR|PROF|CAPT)\.?$/i);
+  if (tm) { title = TITLES[tm[1].toUpperCase()]; raw = raw.slice(0, tm.index).trim(); }
+  else { const lead = raw.match(/^(MR|MRS|MS|MISS|MSTR|MASTER|DR|PROF|CAPT)\.?\s+/i); if (lead) { title = TITLES[lead[1].toUpperCase()]; raw = raw.slice(lead[0].length); } }
+  let name;
+  if (raw.includes("/")) { const [last, first] = raw.split("/").map((x) => x.trim()); name = `${first || ""} ${last || ""}`; }
+  else if (tm) { const w = raw.split(" "); name = w.length > 1 ? `${w.slice(1).join(" ")} ${w[0]}` : raw; } // GDS order without slash: SURNAME FIRST MR
+  else name = raw;
+  return cap(`${title ? title + " " : ""}${name}`).replace(/\s+/g, " ").trim();
+}
 // Client sees only the legs that actually changed and are not yet flown.
 function clientLegs(p) {
   const segs = p.segments || [];
@@ -161,7 +175,13 @@ function templateV2For(p, agency) {
   for (const s of legs) {
     params.push(String(s.sector || "").replace(/\s*(→|->|-)\s*/, " → "));
     params.push(legShort(s.old) || "As per your ticket");
-    params.push(cancelled ? (legShort(s.new) || "Not offered by the airline - full refund applicable") : (legShort(s.new) || "Please contact us"));
+    let rev = legShort(s.new);
+    if (!cancelled && rev && s.old && s.new) {
+      const what = [s.old.date !== s.new.date && "new date", (s.old.dep !== s.new.dep || s.old.arr !== s.new.arr) && "new time",
+        String(s.old.flight || "").replace(/\s/g, "").toUpperCase() !== String(s.new.flight || "").replace(/\s/g, "").toUpperCase() && "new flight"].filter(Boolean);
+      if (what.length) rev += ` (${what.join(", ")})`;
+    }
+    params.push(cancelled ? (legShort(s.new) || "Not offered by the airline - full refund applicable") : (rev || "Please contact us"));
   }
   params.push(agency?.name, agency?.owner_phone || agency?.whatsapp);
   return { name: `${cancelled ? "flight_cancel" : "flight_change"}_${legs.length}leg`, params: params.map((x, i) => clean(x, i === 0 ? 900 : 300)) };

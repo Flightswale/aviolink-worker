@@ -154,11 +154,8 @@ function clientLegs(p) {
 function clientName(p) {
   const pax = (p.passengers || []).map(titleName);
   if (!pax.length) return "Customer";
-  if (pax.length === 1) return pax[0];
-  // Every passenger by name (WhatsApp template text: one line, kept under ~900 characters)
-  let list = pax.slice(0, -1).join(", ") + " and " + pax[pax.length - 1];
-  if (list.length > 900) { let k = pax.length; while (k > 1 && (pax.slice(0, k).join(", ") + ` and ${pax.length - k} others`).length > 900) k--; list = pax.slice(0, k).join(", ") + ` and ${pax.length - k} others`; }
-  return list;
+  const n = pax.length - 1;
+  return pax[0] + (n > 0 ? ` and ${n} other${n === 1 ? "" : "s"}` : "");
 }
 // v2 templates: each changed flight on its own lines, "Reply STOP" footer. 1 or 2 flights; more → v1.
 //   flight_change_1leg / flight_change_2leg / flight_cancel_1leg / flight_cancel_2leg
@@ -218,7 +215,7 @@ async function sendWhatsAppTemplate(toMobile, name, params) {
 let V2_OFF_UNTIL = 0;
 // v3: phone-friendly layout (header, bold labels, ❌ old / ✅ new). Same parameters as v2. Used once Meta approves it.
 const V3_TEXT = (() => {
-  const leg = (n, a, b) => `*{{${n}}}*\n\u274C ${a}: {{${n + 1}}}\n\u2705 ${b}: {{${n + 2}}}`;
+  const leg = (n, a, b) => `*{{${n}}}*\n\u274C ${a}: {{${n + 1}}}\n\n\u2705 ${b}: {{${n + 2}}}`;
   const head = (what) => `Dear {{1}},\n\nThe airline has ${what}.\n\n*PNR:* {{2}}\n*Airline:* {{3}}\n\n`;
   const tail = (n) => `\n\nFor any help, please contact *{{${n}}}* at {{${n + 1}}}. Thank you.`;
   return {
@@ -228,15 +225,19 @@ const V3_TEXT = (() => {
     flight_cancel_2leg: { header: "Flight cancellation", body: head("cancelled flights in your booking") + leg(4, "Cancelled", "Alternative") + "\n\n" + leg(7, "Cancelled", "Alternative") + tail(10) },
   };
 })();
-const v3Ready = (name) => Boolean(WA_TPL_STATE && WA_TPL_STATE[`${name}_v3`] === "APPROVED");
+// Newest approved layout wins: v4 (blank line between Old and New) → v3 → v2. V3_TEXT holds the newest text (v4).
+const LAYOUT_NEWEST = "v4";
+const layoutFor = (name) => ["v4", "v3"].find((v) => WA_TPL_STATE && WA_TPL_STATE[`${name}_${v}`] === "APPROVED") || null;
+const v3Ready = (name) => Boolean(layoutFor(name));
 // One entry point: template when enabled (works any time), plain text as fallback (works inside a 24 h window).
 async function deliverClientWhatsApp(target, payload, agency, text) {
   if (process.env.WA_USE_TEMPLATES === "1" && payload && payload.pnr) {
     if (!WA_TPL_STATE) await waQualityWatch(true).catch(() => {}); // just restarted: load approvals before choosing the layout
     const v2 = Date.now() > V2_OFF_UNTIL ? templateV2For(payload, agency) : null;
     if (v2 && v3Ready(v2.name)) {
-      const r3 = await sendWhatsAppTemplate(target, `${v2.name}_v3`, v2.params);
-      if (r3.ok) return { ...r3, via: `template ${v2.name}_v3` };
+      const lv = layoutFor(v2.name);
+      const r3 = await sendWhatsAppTemplate(target, `${v2.name}_${lv}`, v2.params);
+      if (r3.ok) return { ...r3, via: `template ${v2.name}_${lv}` };
       console.error("[wa-template v3]", r3.err);
     }
     if (v2) {
@@ -273,7 +274,7 @@ function clientPreviewText(payload, agency) {
   const tail = (n, ph) => `\n\nFor any queries, please contact ${n} at ${ph}. Thank you.`;
   if (v2 && v3Ready(v2.name)) {
     const t3 = V3_TEXT[v2.name];
-    let body = t3.body; v2.params.forEach((x, i) => { body = body.split(`{{${i + 1}}}`).join(x); });
+    let body = layoutFor(v2.name) === "v3" ? t3.body.split("\n\n\u2705").join("\n\u2705") : t3.body; v2.params.forEach((x, i) => { body = body.split(`{{${i + 1}}}`).join(x); });
     return `*${t3.header}*\n\n${body}\n\nReply STOP to stop flight alerts\n[ Stop alerts ]`;
   }
   if (v2) {
@@ -474,13 +475,13 @@ async function pollTelegram() {
       const exFor = { flight_change_1leg: [...ex.change1, ...ex.ag], flight_change_2leg: [...ex.change1, ...ex.leg2, ...ex.ag], flight_cancel_1leg: [...ex.cancel1, ...ex.ag], flight_cancel_2leg: [...ex.cancel1, ...ex.cleg2, ...ex.ag] };
       const out = [];
       for (const [base, t] of Object.entries(V3_TEXT)) {
-        const body = { name: `${base}_v3`, language: "en", category: "UTILITY", components: [
+        const body = { name: `${base}_${LAYOUT_NEWEST}`, language: "en", category: "UTILITY", components: [
           { type: "HEADER", format: "TEXT", text: t.header },
           { type: "BODY", text: t.body, example: { body_text: [exFor[base]] } },
           { type: "FOOTER", text: "Reply STOP to stop flight alerts" },
           { type: "BUTTONS", buttons: [{ type: "QUICK_REPLY", text: "Stop alerts" }] } ] };
         const r = await fetch(`https://graph.facebook.com/v20.0/${waba}/message_templates`, { method: "POST", headers: H, body: JSON.stringify(body) }).then((x) => x.json()).catch((e) => ({ error: { message: e.message } }));
-        out.push(r.id ? `\u2705 ${base}_v3: submitted (${r.status || "PENDING"})` : `\u274c ${base}_v3: ${r.error?.error_user_msg || r.error?.message || JSON.stringify(r).slice(0, 200)}`);
+        out.push(r.id ? `\u2705 ${base}_${LAYOUT_NEWEST}: submitted (${r.status || "PENDING"})` : `\u274c ${base}_${LAYOUT_NEWEST}: ${r.error?.error_user_msg || r.error?.message || JSON.stringify(r).slice(0, 200)}`);
       }
       await adminCard(`📋 <b>New WhatsApp layout submitted</b>\n${out.map(esc).join("\n")}\n\nThe new layout is used automatically once Meta approves (you will get a message here). Until then the current one keeps working.`);
       setTimeout(() => waQualityWatch(true).catch(() => {}), 10 * 60000);
@@ -1482,7 +1483,7 @@ let lastReportDay = "";
 // WhatsApp health: warn the moment quality / limit / status / name changes
 let WA_HEALTH = null, waHealthAt = 0, WA_TPL_STATE = null;
 async function waQualityWatch(force = false) {
-  const v3Pending = WA_TPL_STATE && Object.entries(WA_TPL_STATE).some(([k, v]) => k.endsWith("_v3") && v === "PENDING");
+  const v3Pending = WA_TPL_STATE && Object.entries(WA_TPL_STATE).some(([k, v]) => /_v\d+$/.test(k) && v === "PENDING");
   if (!WA.enabled() || (!force && Date.now() - waHealthAt < (v3Pending ? 600000 : 3600000))) return;
   waHealthAt = Date.now();
   try {

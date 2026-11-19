@@ -33,6 +33,11 @@ module.exports = function makeBilling({ sb, adminCard, esc, loadAgencies }) {
   // Start a subscription for an agency → URL of Razorpay's payment page
   async function subscribe(agency, email) {
     if (!enabled()) throw new Error("Online payment is being set up — please WhatsApp +91 95032 55845 to subscribe.");
+    // Reuse an unpaid subscription instead of creating a new one on every click
+    if (agency.rzp_subscription_id) {
+      try { const old = await rzp("GET", `/subscriptions/${agency.rzp_subscription_id}`);
+        if (["created", "authenticated"].includes(old.status)) return payUrl(old.id); } catch (e) {}
+    }
     const plan = await ensurePlan();
     // Customer record carries name, email, phone and GSTIN → Razorpay invoices are proper B2B GST invoices
     let customerId = null;
@@ -45,7 +50,40 @@ module.exports = function makeBilling({ sb, adminCard, esc, loadAgencies }) {
     const sub = await rzp("POST", "/subscriptions", { plan_id: plan, total_count: 120, quantity: 1, customer_notify: 1, ...(customerId ? { customer_id: customerId } : {}),
       notes: { agency_id: agency.id, agency: agency.name, email: email || "" } });
     await sb.from("agencies").update({ rzp_subscription_id: sub.id }).eq("id", agency.id).then(() => {}, () => {});
-    return sub.short_url;
+    return payUrl(sub.id);
+  }
+
+  // Our own payment page with Razorpay Checkout (the Razorpay hosted subscription page is not enabled on this account)
+  const API = (process.env.PUBLIC_API_URL || "https://api.aviolink.in").replace(/\/$/, "");
+  const payUrl = (id) => `${API}/pay/${id}`;
+  const h = (x) => String(x == null ? "" : x).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  async function payPage(subId) {
+    if (!/^sub_[A-Za-z0-9]+$/.test(subId)) return null;
+    const sub = await rzp("GET", `/subscriptions/${subId}`);
+    const done = ["active", "authenticated"].includes(sub.status);
+    let cust = {}; if (sub.customer_id) cust = await rzp("GET", `/customers/${sub.customer_id}`).catch(() => ({}));
+    const opts = { key: KEY, subscription_id: subId, name: "Aviolink", description: `FlightAlert monthly · ₹${PRICE.toLocaleString("en-IN")} incl. GST`,
+      image: "https://aviolink.in/assets/aviolink-icon-120.png", callback_url: `${API}/pay/${subId}/done`, prefill: { name: cust.name || "", email: cust.email || "", contact: cust.contact || "" },
+      notes: sub.notes || {}, theme: { color: "#141B4D" } };
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aviolink — Subscribe</title>
+<style>body{margin:0;font-family:Inter,system-ui,sans-serif;background:#F3F5FB;color:#141B4D;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}
+.c{background:#fff;border-radius:18px;padding:32px;max-width:420px;width:100%;box-shadow:0 10px 40px rgba(20,27,77,.12);text-align:center}h1{font-size:22px;margin:0 0 6px}p{color:#3F4865;line-height:1.5}
+.p{font-size:34px;font-weight:800;margin:14px 0}button{background:#0E9F6E;color:#fff;border:0;border-radius:12px;padding:14px 22px;font-size:17px;font-weight:700;cursor:pointer;width:100%}small{color:#5B6478}</style></head>
+<body><div class="c"><img src="https://aviolink.in/assets/aviolink-icon-120.png" alt="" width="56" height="56"><h1>Aviolink FlightAlert</h1>
+${done ? `<p>✅ This subscription is already active. Thank you!</p><p><a href="https://app.aviolink.in">Open your dashboard</a></p>` :
+`<div class="p">₹${PRICE.toLocaleString("en-IN")}<span style="font-size:15px;font-weight:600;color:#5B6478"> / month incl. GST</span></div>
+<p>Renews automatically every month by UPI AutoPay or card. Cancel any time.</p><button id="pay">Pay securely with Razorpay</button>
+<p><small>Questions? WhatsApp +91 95032 55845 · support@aviolink.in</small></p>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script><script>const o=${JSON.stringify(opts).replace(/</g, "\\u003c")};const r=new Razorpay(o);document.getElementById("pay").onclick=()=>r.open();r.open();</script>`}
+</div></body></html>`;
+  }
+  async function payDone(subId, form) {
+    const sig = crypto.createHmac("sha256", SECRET).update(`${form.razorpay_payment_id}|${subId}`).digest("hex");
+    const ok = !!form.razorpay_signature && sig === form.razorpay_signature;
+    return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aviolink</title></head>
+<body style="font-family:system-ui,sans-serif;background:#F3F5FB;color:#141B4D;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:16px">
+<div style="background:#fff;border-radius:18px;padding:32px;max-width:420px;text-align:center">${ok ? `<h1>✅ Payment successful</h1><p>Your subscription is active and renews automatically. A receipt will reach your email.</p>` : `<h1>Payment not completed</h1><p>Nothing was charged. <a href="${payUrl(h(subId))}">Try again</a> or WhatsApp +91 95032 55845.</p>`}
+<p><a href="https://app.aviolink.in">Open your dashboard</a></p></div></body></html>`;
   }
 
   // Webhook: verify signature on the raw body, then apply
@@ -87,5 +125,5 @@ module.exports = function makeBilling({ sb, adminCard, esc, loadAgencies }) {
     return out.join("\n");
   }
 
-  return { enabled, subscribe, webhook, check, price: PRICE };
+  return { enabled, subscribe, webhook, check, payPage, payDone, price: PRICE };
 };

@@ -1514,6 +1514,14 @@ function startHttp() {
         return res.end(u.pathname === "/privacy" ? PRIVACY_HTML : TERMS_HTML);
       }
       // WhatsApp webhook: delivery statuses (sent/delivered/read/failed) + client replies
+      const payM = u.pathname.match(/^\/pay\/(sub_[A-Za-z0-9]+)(\/done)?$/);
+      if (payM) {
+        let form = {};
+        if (payM[2] && req.method === "POST") { let raw = ""; for await (const c of req) raw += c; form = Object.fromEntries(new URLSearchParams(raw)); }
+        const html = payM[2] ? await BILLING.payDone(payM[1], form) : await BILLING.payPage(payM[1]).catch((e) => { console.error("[pay]", e.message); return null; });
+        res.writeHead(html ? 200 : 404, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+        return res.end(html || "Payment link not found. Please WhatsApp +91 95032 55845.");
+      }
       if (u.pathname === "/webhook/razorpay" && req.method === "POST") {
         let raw = ""; for await (const c of req) raw += c;
         const r = await BILLING.webhook(raw, req.headers["x-razorpay-signature"]).catch((e) => ({ ok: false, err: e.message }));

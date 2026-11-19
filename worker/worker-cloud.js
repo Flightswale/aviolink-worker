@@ -348,6 +348,15 @@ async function pollTelegram() {
     // /retest PNR  -> forget this PNR's recent mails + alerts so the next poll re-reads them (no re-forwarding needed)
     const txt = (u.message?.text || "").trim();
     if (txt.startsWith("/report")) { await nightlyReport(true); continue; }
+    if (txt.startsWith("/welcome")) { // /welcome <agency name or slug> — (re)send the welcome mail
+      const q = txt.split(/\s+/).slice(1).join(" ").toLowerCase();
+      const { data: list } = await sb.from("agencies").select("*");
+      const a = (list || []).find((x) => x.slug === q || (q && String(x.name).toLowerCase().includes(q)));
+      if (!SUPPORT_GMAIL) await adminCard("✉️ Support mailbox is not connected yet — open https://api.aviolink.in/connect-support and sign in as support@aviolink.in.");
+      else if (!a || !a.notify_email) await adminCard(`✉️ No agency with an email found for "${esc(q)}".`);
+      else { const ok = await sendSignupWelcome(a, a.notify_email).catch((e) => { adminCard(`✉️ Welcome failed: ${esc(e.message)}`); return false; }); if (ok) await adminCard(`✉️ Welcome mail sent to ${esc(a.notify_email)} (${esc(a.name)}).`); }
+      continue;
+    }
     if (txt.startsWith("/billing")) { await adminCard(`💳 <b>BILLING CHECK</b>\n${esc(await BILLING.check())}\n\nWebhook URL in Razorpay must be: https://api.aviolink.in/webhook/razorpay`); continue; }
     if (txt.startsWith("/marketing")) { try { await weeklyMarketing(true); } catch (e) { await adminCard(`📣 Marketing post failed: ${esc(e.message)}`); } continue; }
     if (txt.startsWith("/proof")) {

@@ -1517,7 +1517,7 @@ async function weeklyMarketing(force = false) {
   const wa = `✈️ *Airline changes this week*\n\nIn the last 7 days Aviolink caught *${A.length} flight changes* in travel agency mailboxes${cancels ? ` — including *${cancels} cancellation${cancels === 1 ? "" : "s"}*` : ""}.\n${top ? `Most changes: ${top}.\n` : ""}${night ? `${night} of them arrived between 9 PM and 8 AM.\n` : ""}\n💡 *Tip:* ${tip}\n\nAviolink reads your airline mails and sends your clients a WhatsApp alert in your agency's name. Free 30-day trial: aviolink.in\nThis week's full report: aviolink.in/news`;
   const li = `Airline schedule changes this week: ${A.length} caught${cancels ? `, ${cancels} of them cancellation${cancels === 1 ? "" : "s"}` : ""}${night ? `, ${night} arriving overnight` : ""}.\n\n${top ? `Most active: ${top}.\n\n` : ""}${tip}\n\nAviolink reads ${(mails || 0) >= 1000 ? `thousands of ` : ""}airline and supplier mails for travel agencies and turns every change into a clear WhatsApp alert for the client — in the agency's own name.\n\nFree 30-day trial → aviolink.in\n\n#TravelAgents #Airlines #TravelTech #IndiGo #FlightChanges`;
   let newsLine = "";
-  try { const n = await NEWS.catchUp(); newsLine = `\n🌐 Weekly report page${n ? " published" : ""}: aviolink.in/news/${NEWS.key(new Date(NEWS.mondayOf(Date.now()).getTime() - 7 * 86400000))}`; } catch (e) { console.error("[news]", e.message); }
+  try { const n = await NEWS.catchUp(); if (n) NEWS.pingAll().catch(() => {}); newsLine = `\n🌐 Weekly report page${n ? " published" : ""}: aviolink.in/news/${NEWS.key(new Date(NEWS.mondayOf(Date.now()).getTime() - 7 * 86400000))}`; } catch (e) { console.error("[news]", e.message); }
   await adminCard(`📣 <b>WEEKLY MARKETING POSTS</b> — copy, check, share\n\n<b>1) WhatsApp groups / Status:</b>\n<pre>${esc(wa)}</pre>\n<b>2) LinkedIn / Facebook:</b>\n<pre>${esc(li)}</pre>\nNumbers are from the last 7 days, no agency or client names included.${newsLine}`);
 }
 
@@ -1665,7 +1665,8 @@ Reason: ${esc(why)}`);
   const agLoop = async () => { try { await loadAgencies(); await sendWelcomes(); } catch (_) {} setTimeout(agLoop, 120000); };
   const wdLoop = async () => { try { await watchdog(); await nightlyReport(); await waQualityWatch(); await weeklyMarketing(); await trialReminders(); } catch (e) { console.error("[watchdog]", e.message); } setTimeout(wdLoop, 60000); };
   setTimeout(wdLoop, 60000);
-  setTimeout(() => NEWS.catchUp().then((n) => n && console.log(`[news] ${n} weekly report(s) saved`)).catch((e) => console.error("[news]", e.message)), 90000);
+  setTimeout(() => NEWS.catchUp().then((n) => { if (n) console.log(`[news] ${n} weekly report(s) saved`); return NEWS.pingAll(); })
+    .then((st) => console.log(`[indexnow] ping status ${st}`)).catch((e) => console.error("[news]", e.message)), 180000);
   const bfLoop = async () => { if (gmail.enabled()) { try { await runBackfills(); } catch (e) { console.error("[backfill-loop]", e.message); } } setTimeout(bfLoop, 60000); };
   sendWelcomes().catch(()=>{});
   startHttp();

@@ -104,5 +104,19 @@ ${nav}</div></section>`;
     return { type: "text/html; charset=utf-8", body: await wrap(`/news/${week}`, `Airline schedule changes ${r}: ${d.changes || 0} changes${top.length ? `, ${top[0]} most` : ""} | Aviolink`, `${d.changes || 0} flight re-timings and ${d.cancels || 0} cancellations in Indian travel agency mailboxes, ${r}${top.length ? `. Most from ${top.join(", ")}` : ""}.`, body) };
   }
 
-  return { catchUp, saveWeek, mondayOf, render, key };
+  // IndexNow: tell Bing / Yandex / Seznam about pages (Google does not use IndexNow; it reads sitemap.xml)
+  const INDEXNOW_KEY = "838465aaa4c93141df30a8658b788332";
+  async function pingIndexNow(paths) {
+    const urlList = paths.map((p) => "https://aviolink.in" + p);
+    const r = await fetch("https://api.indexnow.org/indexnow", { method: "POST", headers: { "content-type": "application/json; charset=utf-8" },
+      body: JSON.stringify({ host: "aviolink.in", key: INDEXNOW_KEY, keyLocation: `https://aviolink.in/${INDEXNOW_KEY}.txt`, urlList }) });
+    return r.status;
+  }
+  async function pingAll() {
+    const { data } = await sb.from("weekly_news").select("week");
+    const site = ["/", "/flightalert.html", "/pricing.html", "/about.html", "/team.html", "/contact.html", "/security.html", "/signup.html", "/news"];
+    return pingIndexNow(site.concat((data || []).map((r) => "/news/" + String(r.week).slice(0, 10))));
+  }
+
+  return { catchUp, saveWeek, mondayOf, render, key, pingIndexNow, pingAll };
 };

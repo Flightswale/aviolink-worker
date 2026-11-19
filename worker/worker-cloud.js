@@ -167,7 +167,7 @@ function legShort(l) {
 }
 function templateV2For(p, agency) {
   const legs = clientLegs(p);
-  if (!legs.length || legs.length > 2) return null;
+  if (!legs.length || legs.length > 4) return null;
   const cancelled = p.changeType === "CANCELLATION";
   const params = [clientName(p), p.pnr, airlineName(p.airline || "")];
   for (const s of legs) {
@@ -218,12 +218,14 @@ const V3_TEXT = (() => {
   const leg = (n, a, b) => `*{{${n}}}*\n\u274C ${a}: {{${n + 1}}}\n\n\u2705 ${b}: {{${n + 2}}}`;
   const head = (what) => `Dear {{1}},\n\nThe airline has ${what}.\n\n*PNR:* {{2}}\n*Airline:* {{3}}\n\n`;
   const tail = (n) => `\n\nFor any help, please contact *{{${n}}}* at {{${n + 1}}}. Thank you.`;
-  return {
-    flight_change_1leg: { header: "Flight schedule change", body: head("changed your flight booking") + leg(4, "Old", "New") + tail(7) },
-    flight_change_2leg: { header: "Flight schedule change", body: head("changed your flight booking") + leg(4, "Old", "New") + "\n\n" + leg(7, "Old", "New") + tail(10) },
-    flight_cancel_1leg: { header: "Flight cancellation", body: head("cancelled a flight in your booking") + leg(4, "Cancelled", "Alternative") + tail(7) },
-    flight_cancel_2leg: { header: "Flight cancellation", body: head("cancelled flights in your booking") + leg(4, "Cancelled", "Alternative") + "\n\n" + leg(7, "Cancelled", "Alternative") + tail(10) },
-  };
+  const out = {};
+  for (let k = 1; k <= 4; k++) {
+    const legsC = Array.from({ length: k }, (_, x) => leg(4 + 3 * x, "Old", "New")).join("\n\n");
+    const legsX = Array.from({ length: k }, (_, x) => leg(4 + 3 * x, "Cancelled", "Alternative")).join("\n\n");
+    out[`flight_change_${k}leg`] = { header: "Flight schedule change", body: head("changed your flight booking") + legsC + tail(4 + 3 * k) };
+    out[`flight_cancel_${k}leg`] = { header: "Flight cancellation", body: head(k === 1 ? "cancelled a flight in your booking" : "cancelled flights in your booking") + legsX + tail(4 + 3 * k) };
+  }
+  return out;
 })();
 // Newest approved layout wins: v4 (blank line between Old and New) → v3 → v2. V3_TEXT holds the newest text (v4).
 const LAYOUT_NEWEST = "v4";
@@ -240,7 +242,7 @@ async function deliverClientWhatsApp(target, payload, agency, text) {
       if (r3.ok) return { ...r3, via: `template ${v2.name}_${lv}` };
       console.error("[wa-template v3]", r3.err);
     }
-    if (v2) {
+    if (v2 && /_[12]leg$/.test(v2.name)) {
       const r = await sendWhatsAppTemplate(target, v2.name, v2.params);
       if (r.ok) return { ...r, via: `template ${v2.name}` };
       if (/^13200[01]|^132012/.test(r.err)) V2_OFF_UNTIL = Date.now() + 3600000; // not approved yet → use v1 for an hour
@@ -277,7 +279,7 @@ function clientPreviewText(payload, agency) {
     let body = layoutFor(v2.name) === "v3" ? t3.body.split("\n\n\u2705").join("\n\u2705") : t3.body; v2.params.forEach((x, i) => { body = body.split(`{{${i + 1}}}`).join(x); });
     return `*${t3.header}*\n\n${body}\n\nReply STOP to stop flight alerts\n[ Stop alerts ]`;
   }
-  if (v2) {
+  if (v2 && /_[12]leg$/.test(v2.name)) {
     const q = v2.params, cancel = v2.name.startsWith("flight_cancel");
     const head = `Dear ${q[0]},\n\nThe airline has ${cancel ? (v2.name.endsWith("2leg") ? "cancelled flights in" : "cancelled a flight in") : "changed the schedule of"} your booking PNR ${q[1]} with ${q[2]}.\n\n`;
     const l1 = cancel ? "Cancelled" : "Previous", l2 = cancel ? "Alternative" : "Revised";
@@ -472,9 +474,14 @@ async function pollTelegram() {
         leg2: ["DEL \u2192 MAA", "AI 539 \u00b7 30 Nov \u00b7 06:00-08:50", "AI 539 \u00b7 3 Dec \u00b7 06:00-08:50 (new date)"],
         cancel1: ["Mr Allen Singh", "9FNVIG", "Air India (AI)", "MAA \u2192 DEL", "AI 538 \u00b7 25 Nov \u00b7 20:00-22:45", "AI 540 \u00b7 25 Nov \u00b7 22:30-01:15"],
         cleg2: ["DEL \u2192 MAA", "AI 539 \u00b7 30 Nov \u00b7 06:00-08:50", "Not offered by the airline - full refund applicable"], ag: ["Finch Travels", "+91 95032 55845"] };
-      const exFor = { flight_change_1leg: [...ex.change1, ...ex.ag], flight_change_2leg: [...ex.change1, ...ex.leg2, ...ex.ag], flight_cancel_1leg: [...ex.cancel1, ...ex.ag], flight_cancel_2leg: [...ex.cancel1, ...ex.cleg2, ...ex.ag] };
+      const leg3 = ["BOM \u2192 DOH", "QR 557 \u00b7 2 Dec \u00b7 04:05-05:25", "QR 557 \u00b7 2 Dec \u00b7 04:45-06:05 (new time)"], leg4 = ["DOH \u2192 BCN", "QR 145 \u00b7 2 Dec \u00b7 08:20-14:45", "QR 147 \u00b7 2 Dec \u00b7 09:10-15:35 (new time, new flight)"];
+      const exFor = { flight_change_1leg: [...ex.change1, ...ex.ag], flight_change_2leg: [...ex.change1, ...ex.leg2, ...ex.ag], flight_cancel_1leg: [...ex.cancel1, ...ex.ag], flight_cancel_2leg: [...ex.cancel1, ...ex.cleg2, ...ex.ag],
+        flight_change_3leg: [...ex.change1, ...ex.leg2, ...leg3, ...ex.ag], flight_change_4leg: [...ex.change1, ...ex.leg2, ...leg3, ...leg4, ...ex.ag],
+        flight_cancel_3leg: [...ex.cancel1, ...ex.cleg2, ...leg3, ...ex.ag], flight_cancel_4leg: [...ex.cancel1, ...ex.cleg2, ...leg3, ...leg4, ...ex.ag] };
+      const only = /legs34/.test(txt) ? /_[34]leg$/ : /./;
       const out = [];
       for (const [base, t] of Object.entries(V3_TEXT)) {
+        if (!only.test(base) || (WA_TPL_STATE && WA_TPL_STATE[`${base}_${LAYOUT_NEWEST}`])) continue; // skip ones already submitted
         const body = { name: `${base}_${LAYOUT_NEWEST}`, language: "en", category: "UTILITY", components: [
           { type: "HEADER", format: "TEXT", text: t.header },
           { type: "BODY", text: t.body, example: { body_text: [exFor[base]] } },

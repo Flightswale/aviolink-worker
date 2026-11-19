@@ -244,7 +244,7 @@ async function vAlerts(m) {
   // Same PNR + same new timings received twice (airlines often mail twice) → show once
   const seen = new Map();
   for (const a of list) {
-    const k = (a.agency_id || "") + "|" + (a.pnr || a.id) + "|" + JSON.stringify(((a.payload || {}).segments || []).map((s) => { const l = s.new || s.old || {}; return [s.status, l.flight, l.date, l.dep]; }));
+    const k = (a.agency_id || "") + "|" + (a.pnr || a.id) + "|" + JSON.stringify(((a.payload || {}).segments || []).map((s) => { const l = s.new || s.old || {}; return [s.status, s.sector, l.flight, l.date, l.dep, l.arr, l.arrDayOffset || 0]; }));
     if (seen.has(k)) { const first = seen.get(k); first._dups = (first._dups || 0) + 1; a._dupOf = first.id; } else seen.set(k, a);
   }
   const cnt = (k) => list.filter((a) => !(a._dupOf && bucket(a) !== "sent") && bucket(a) === k).length;

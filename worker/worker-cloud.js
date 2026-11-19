@@ -174,7 +174,9 @@ function templateV2For(p, agency) {
   const cancelled = p.changeType === "CANCELLATION";
   const params = [clientName(p), p.pnr, airlineName(p.airline || "")];
   for (const s of legs) {
-    params.push(String(s.sector || "").replace(/\s*(→|->|-)\s*/, " → "));
+    const arrow = (x) => String(x || "").replace(/\s*(→|->|-)\s*/, " → ");
+    const ns3 = (x) => (String(x || "").toUpperCase().match(/[A-Z]{3}/g) || []).join("-");
+    params.push(s.new?.sector && ns3(s.new.sector) !== ns3(s.sector) ? `${arrow(s.new.sector)} (airport changed, was ${arrow(s.sector)})` : arrow(s.sector));
     params.push(legShort(s.old) || "As per your ticket");
     let rev = legShort(s.new);
     if (!cancelled && rev && s.old && s.new) {
@@ -230,6 +232,7 @@ const v3Ready = (name) => Boolean(WA_TPL_STATE && WA_TPL_STATE[`${name}_v3`] ===
 // One entry point: template when enabled (works any time), plain text as fallback (works inside a 24 h window).
 async function deliverClientWhatsApp(target, payload, agency, text) {
   if (process.env.WA_USE_TEMPLATES === "1" && payload && payload.pnr) {
+    if (!WA_TPL_STATE) await waQualityWatch(true).catch(() => {}); // just restarted: load approvals before choosing the layout
     const v2 = Date.now() > V2_OFF_UNTIL ? templateV2For(payload, agency) : null;
     if (v2 && v3Ready(v2.name)) {
       const r3 = await sendWhatsAppTemplate(target, `${v2.name}_v3`, v2.params);
@@ -308,9 +311,11 @@ async function sendAlertToClient(alertId, { mobile = null, actor = "telegram", f
   if (opt) return { ok: false, err: "This client replied STOP — alerts to this number are switched off" };
   if (!hasRealChange(p)) return { ok: false, err: "Old and new timings are the same — there is no change to tell the client" };
   // Last check before the client sees it: a leg without its old timing gets it from the ticket on file
-  if ((p.segments || []).some((x) => !(x.old && (x.old.dep || x.old.date)))) {
+  {
     const { data: bk2 } = await sb.from("bookings").select("segments").eq("agency_id", al.agency_id).eq("pnr", al.pnr).maybeSingle();
-    if (bk2?.segments?.length && enrichOldTiming(p, bk2.segments)) {
+    const t1 = bk2?.segments?.length ? enrichOldTiming(p, bk2.segments) : false;
+    const t2 = bk2?.segments?.length ? fixNewAirport(p, bk2.segments) : false;
+    if (t1 || t2) {
       const m2 = compile(p, { name: ag?.name, phone: ag?.owner_phone || ag?.whatsapp || "" });
       al.compiled_whatsapp = m2.whatsapp;
       await sb.from("alerts").update({ payload: p, compiled_whatsapp: m2.whatsapp }).eq("id", al.id).then(() => {}, () => {});
@@ -653,6 +658,18 @@ async function deliverToAgency(agency, parsed, msg, alertId) {
 
 // Fill OLD timing from stored booking segments when a change shows only the NEW schedule
 // (IndiGo "Revised Itinerary" style). Match by flight number, else by sector. Returns true if anything changed.
+// Flight changed to one landing/departing at another airport (e.g. BOM → NMI): take the new flight's route from the ticket
+function fixNewAirport(p, bookingSegments) {
+  const nf = (f) => String(f || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const ns = (x) => (String(x || "").toUpperCase().match(/[A-Z]{3}/g) || []).join("-");
+  let touched = false;
+  for (const s of p.segments || []) {
+    if (!s.old || !s.new || nf(s.old.flight) === nf(s.new.flight) || s.new.sector) continue;
+    const bs = (bookingSegments || []).find((x) => nf(x.flight) === nf(s.new.flight) && (!x.date || !s.new.date || x.date === s.new.date));
+    if (bs && ns(bs.sector) && ns(bs.sector) !== ns(s.sector)) { s.new.sector = bs.sector; touched = true; }
+  }
+  return touched;
+}
 function enrichOldTiming(p, bookingSegments) {
   const nf = (f) => String(f || "").toUpperCase().replace(/\s+/g, "");
   let touched = false;
@@ -773,6 +790,7 @@ async function handleParsed(agency, parsed, subject, messageId) {
         if ((!parsed.passengers || !parsed.passengers.length) && b.passengers?.length) parsed.passengers = b.passengers;
         parsed.clientMobile = b.mobile || null;
         enrichOldTiming(parsed, b.segments);
+        fixNewAirport(parsed, b.segments);
       }
     }
     // Old and new identical on every leg → nothing for the client; tell the operator instead of alerting

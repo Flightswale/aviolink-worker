@@ -217,7 +217,7 @@ let V2_OFF_UNTIL = 0;
 const V3_TEXT = (() => {
   const leg = (n, a, b) => `*{{${n}}}*\n\u274C ${a}: {{${n + 1}}}\n\u2705 ${b}: {{${n + 2}}}`;
   const head = (what) => `Dear {{1}},\n\nThe airline has ${what}.\n\n*PNR:* {{2}}\n*Airline:* {{3}}\n\n`;
-  const tail = (n) => `\n\nFor any help, please contact *{{${n}}}* at {{${n + 1}}}.`;
+  const tail = (n) => `\n\nFor any help, please contact *{{${n}}}* at {{${n + 1}}}. Thank you.`;
   return {
     flight_change_1leg: { header: "Flight schedule change", body: head("changed your flight booking") + leg(4, "Old", "New") + tail(7) },
     flight_change_2leg: { header: "Flight schedule change", body: head("changed your flight booking") + leg(4, "Old", "New") + "\n\n" + leg(7, "Old", "New") + tail(10) },

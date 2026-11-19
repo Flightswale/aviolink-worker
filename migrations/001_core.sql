@@ -31,3 +31,8 @@ alter table app_settings enable row level security;
 alter table agencies add column if not exists fwd_code text;
 alter table agencies add column if not exists fwd_confirmed_at timestamptz;
 alter table agencies add column if not exists fwd_last_at timestamptz;
+create table if not exists payments (id text primary key, agency_id text, amount numeric, method text, order_id text, created_at timestamptz default now());
+alter table payments enable row level security;
+alter table agencies add column if not exists renew_reminder text;
+create table if not exists weekly_news (week date primary key, data jsonb, created_at timestamptz default now());
+alter table weekly_news enable row level security;

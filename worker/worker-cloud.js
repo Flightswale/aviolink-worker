@@ -1462,9 +1462,29 @@ async function trialReminders() {
       const subj = step === "ended" ? "Your Aviolink trial has ended" : `Your Aviolink trial ends ${left === 1 ? "tomorrow" : "on " + end}`;
       const lead = step === "ended" ? "Your free trial has ended, so new flight-change alerts are paused." : `Your free trial ends ${left === 1 ? "tomorrow" : "on <b>" + end + "</b>"}.`;
       await m.sendMail({ from: `"Aviolink" <${SUPPORT_GMAIL.email}>`, to: a.notify_email, bcc: SUPPORT_GMAIL.email, subject: subj,
-        html: `<div style="font-family:Arial,sans-serif;max-width:560px;color:#141B4D;line-height:1.55"><p>Hi ${esc(a.contact_name || a.name)},</p><p>${lead}</p><p>So far Aviolink has caught <b>${count || 0} flight change${count === 1 ? "" : "s"}</b> for ${esc(a.name)}.</p><p>To ${step === "ended" ? "switch alerts back on" : "keep receiving alerts without a break"}, click <b>Subscribe</b> in your dashboard (UPI AutoPay or card, renews monthly), or reply to this mail / WhatsApp us at <b>+91 95032 55845</b>.</p><p style="margin:22px 0"><a href="https://app.aviolink.in" style="background:#1E2761;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold">Open your dashboard</a></p><p>Team Aviolink · <a href="https://aviolink.in">aviolink.in</a></p></div>` }).catch((e) => console.error("[trial-mail]", e.message));
+        html: `<div style="font-family:Arial,sans-serif;max-width:560px;color:#141B4D;line-height:1.55"><p>Hi ${esc(a.contact_name || a.name)},</p><p>${lead}</p><p>So far Aviolink has caught <b>${count || 0} flight change${count === 1 ? "" : "s"}</b> for ${esc(a.name)}.</p><p>To ${step === "ended" ? "switch alerts back on" : "keep receiving alerts without a break"}, click <b>Pay for 1 month</b> in your dashboard (UPI, card or net banking — no auto-debit), or reply to this mail / WhatsApp us at <b>+91 95032 55845</b>.</p><p style="margin:22px 0"><a href="https://app.aviolink.in" style="background:#1E2761;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold">Open your dashboard</a></p><p>Team Aviolink · <a href="https://aviolink.in">aviolink.in</a></p></div>` }).catch((e) => console.error("[trial-mail]", e.message));
     }
     await sb.from("agencies").update({ trial_reminder: step }).eq("id", a.id);
+  }
+  // Paid plans: no auto-debit, so remind 5 days and 1 day before expiry, and on expiry
+  const { data: paid } = await sb.from("agencies").select("id,name,paid_until,notify_email,contact_name,owner_phone,whatsapp,status,renew_reminder").eq("plan", "paid");
+  for (const a of paid || []) {
+    if (!a.paid_until || a.status === "suspended" || a.id === DEFAULT_AGENCY?.id) continue;
+    const left = Math.ceil((new Date(a.paid_until) - Date.now()) / 86400000);
+    const step = left <= 0 ? "ended" : left <= 1 ? "1day" : left <= 5 ? "5days" : null;
+    const key = step && `${String(a.paid_until).slice(0, 10)}:${step}`;
+    if (!step || a.renew_reminder === key || (step === "5days" && String(a.renew_reminder || "").startsWith(String(a.paid_until).slice(0, 10) + ":1day"))) continue;
+    if (step === "ended" && left < -3) continue; // stop after a few days
+    const end = new Date(a.paid_until).toLocaleDateString("en-IN", { day: "numeric", month: "long" });
+    await adminCard(`${step === "ended" ? "⌛ <b>PLAN EXPIRED</b>" : `🔔 <b>PAYMENT DUE IN ${left} DAY${left === 1 ? "" : "S"}</b>`} · 🏢 ${esc(a.name)}\n👤 ${esc(a.contact_name || "-")} · 📞 ${esc(a.whatsapp || a.owner_phone || "-")}\nValid till ${end}. Reminder mail sent.`).catch(() => {});
+    const m = getSupportMailer();
+    if (m && a.notify_email) {
+      const subj = step === "ended" ? "Your Aviolink plan has expired" : `Your Aviolink plan ends ${left === 1 ? "tomorrow" : "on " + end}`;
+      const lead = step === "ended" ? "Your Aviolink plan has expired, so new flight-change alerts are paused." : `Your Aviolink plan is valid till <b>${end}</b>.`;
+      await m.sendMail({ from: `"Aviolink" <${SUPPORT_GMAIL.email}>`, to: a.notify_email, bcc: SUPPORT_GMAIL.email, subject: subj,
+        html: `<div style="font-family:Arial,sans-serif;max-width:560px;color:#141B4D;line-height:1.55"><p>Hi ${esc(a.contact_name || a.name)},</p><p>${lead}</p><p>To ${step === "ended" ? "switch alerts back on" : "keep alerts running without a break"}, open your dashboard and click <b>Pay for 1 month</b> (UPI, card or net banking — no auto-debit). The new month is added after your current expiry, so paying early loses nothing.</p><p style="margin:22px 0"><a href="https://app.aviolink.in" style="background:#1E2761;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold">Pay for 1 month</a></p><p>Questions? Reply to this mail or WhatsApp <b>+91 95032 55845</b>.</p><p>Team Aviolink · <a href="https://aviolink.in">aviolink.in</a></p></div>` }).catch((e) => console.error("[renew-mail]", e.message));
+    }
+    await sb.from("agencies").update({ renew_reminder: key }).eq("id", a.id);
   }
 }
 
@@ -1494,13 +1514,16 @@ async function weeklyMarketing(force = false) {
   const byAir = {}; for (const a of A) { const k = a.payload?.airline; if (k) byAir[k] = (byAir[k] || 0) + 1; }
   const top = Object.entries(byAir).sort((x, y) => y[1] - x[1]).slice(0, 3).map(([k, v]) => `${airlineName(k) || k}: ${v}`).join(", ");
   const tip = TIPS[Math.floor(Date.now() / 6048e5) % TIPS.length];
-  const wa = `✈️ *Airline changes this week*\n\nIn the last 7 days Aviolink caught *${A.length} flight changes* in travel agency mailboxes${cancels ? ` — including *${cancels} cancellation${cancels === 1 ? "" : "s"}*` : ""}.\n${top ? `Most changes: ${top}.\n` : ""}${night ? `${night} of them arrived between 9 PM and 8 AM.\n` : ""}\n💡 *Tip:* ${tip}\n\nAviolink reads your airline mails and sends your clients a WhatsApp alert in your agency's name. Free 30-day trial: aviolink.in`;
+  const wa = `✈️ *Airline changes this week*\n\nIn the last 7 days Aviolink caught *${A.length} flight changes* in travel agency mailboxes${cancels ? ` — including *${cancels} cancellation${cancels === 1 ? "" : "s"}*` : ""}.\n${top ? `Most changes: ${top}.\n` : ""}${night ? `${night} of them arrived between 9 PM and 8 AM.\n` : ""}\n💡 *Tip:* ${tip}\n\nAviolink reads your airline mails and sends your clients a WhatsApp alert in your agency's name. Free 30-day trial: aviolink.in\nThis week's full report: aviolink.in/news`;
   const li = `Airline schedule changes this week: ${A.length} caught${cancels ? `, ${cancels} of them cancellation${cancels === 1 ? "" : "s"}` : ""}${night ? `, ${night} arriving overnight` : ""}.\n\n${top ? `Most active: ${top}.\n\n` : ""}${tip}\n\nAviolink reads ${(mails || 0) >= 1000 ? `thousands of ` : ""}airline and supplier mails for travel agencies and turns every change into a clear WhatsApp alert for the client — in the agency's own name.\n\nFree 30-day trial → aviolink.in\n\n#TravelAgents #Airlines #TravelTech #IndiGo #FlightChanges`;
-  await adminCard(`📣 <b>WEEKLY MARKETING POSTS</b> — copy, check, share\n\n<b>1) WhatsApp groups / Status:</b>\n<pre>${esc(wa)}</pre>\n<b>2) LinkedIn / Facebook:</b>\n<pre>${esc(li)}</pre>\nNumbers are from the last 7 days, no agency or client names included.`);
+  let newsLine = "";
+  try { const n = await NEWS.catchUp(); newsLine = `\n🌐 Weekly report page${n ? " published" : ""}: aviolink.in/news/${NEWS.key(new Date(NEWS.mondayOf(Date.now()).getTime() - 7 * 86400000))}`; } catch (e) { console.error("[news]", e.message); }
+  await adminCard(`📣 <b>WEEKLY MARKETING POSTS</b> — copy, check, share\n\n<b>1) WhatsApp groups / Status:</b>\n<pre>${esc(wa)}</pre>\n<b>2) LinkedIn / Facebook:</b>\n<pre>${esc(li)}</pre>\nNumbers are from the last 7 days, no agency or client names included.${newsLine}`);
 }
 
 // ---------- HTTP: OAuth callback + health ----------
 let DASH = null, BILLING = null;
+const NEWS = require("./news")({ sb, airlineName, tips: TIPS });
 function startHttp() {
   BILLING = require("./billing")({ sb, adminCard, esc, loadAgencies });
   DASH = require("./dashboard")({ billing: BILLING, sb, gmail, getAgencies: () => AGENCIES, defaultAgencyId: () => DEFAULT_AGENCY?.id, sendSignupWelcome, loadAgencies, GMAIL_HEALTH, sendAlertToClient, adminCard, esc, waEnabled: () => WA.enabled() });
@@ -1513,12 +1536,17 @@ function startHttp() {
     res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     try {
+      if (u.pathname === "/news" || u.pathname.startsWith("/news/")) {
+        const out = await NEWS.render(u.pathname.replace(/\/$/, "") || "/news").catch((e) => { console.error("[news]", e.message); return null; });
+        res.writeHead(out ? 200 : 404, { "content-type": out ? out.type : "text/plain", "cache-control": "public, max-age=1800" });
+        return res.end(out ? out.body : "Not found");
+      }
       if (u.pathname === "/privacy" || u.pathname === "/terms") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         return res.end(u.pathname === "/privacy" ? PRIVACY_HTML : TERMS_HTML);
       }
       // WhatsApp webhook: delivery statuses (sent/delivered/read/failed) + client replies
-      const payM = u.pathname.match(/^\/pay\/(sub_[A-Za-z0-9]+)(\/done)?$/);
+      const payM = u.pathname.match(/^\/pay\/((?:order|sub)_[A-Za-z0-9]+)(\/done)?$/);
       if (payM) {
         let form = {};
         if (payM[2] && req.method === "POST") { let raw = ""; for await (const c of req) raw += c; form = Object.fromEntries(new URLSearchParams(raw)); }
@@ -1637,6 +1665,7 @@ Reason: ${esc(why)}`);
   const agLoop = async () => { try { await loadAgencies(); await sendWelcomes(); } catch (_) {} setTimeout(agLoop, 120000); };
   const wdLoop = async () => { try { await watchdog(); await nightlyReport(); await waQualityWatch(); await weeklyMarketing(); await trialReminders(); } catch (e) { console.error("[watchdog]", e.message); } setTimeout(wdLoop, 60000); };
   setTimeout(wdLoop, 60000);
+  setTimeout(() => NEWS.catchUp().then((n) => n && console.log(`[news] ${n} weekly report(s) saved`)).catch((e) => console.error("[news]", e.message)), 90000);
   const bfLoop = async () => { if (gmail.enabled()) { try { await runBackfills(); } catch (e) { console.error("[backfill-loop]", e.message); } } setTimeout(bfLoop, 60000); };
   sendWelcomes().catch(()=>{});
   startHttp();

@@ -200,6 +200,7 @@ module.exports = function makeDashboard(ctx) {
         wa_error: a.wa_error || null, sent_at: a.sent_at, sent_by: a.sent_by || null, confidence: a.confidence,
         payload: { airline: a.payload?.airline, passengers: a.payload?.passengers || [], segments: a.payload?.segments || [], changeType: a.payload?.changeType },
         text: a.compiled_whatsapp || "",
+        client_text: ctx.clientPreview ? (() => { try { return ctx.clientPreview(a.payload, a.agency_id); } catch (_) { return ""; } })() : "",
       }))), true;
     }
     const am = p.match(/^\/api\/alerts\/([0-9a-f-]{36})\/(send|ignore)$/);

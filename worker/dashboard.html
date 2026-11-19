@@ -264,9 +264,9 @@ function alertCard(a, showAgency) {
       ${canSend ? `<input id="mob-${a.id}" placeholder="Client mobile e.g. 9876543210" value="${h(a.client_mobile)}" style="width:220px">
       <button class="btn green" data-send="${a.id}" ${ME.waReady ? "" : "disabled title='WhatsApp not configured'"}>Send on WhatsApp</button>
       <button class="btn ghost" data-ign="${a.id}">Ignore</button>` : ""}
-      <button class="btn ghost" data-prev="${a.id}">Preview message</button>
+      <button class="btn ghost" data-prev="${a.id}">Preview client message</button>
     </div>
-    <pre class="msg" id="pv-${a.id}" hidden>${h(a.text)}</pre></div>`;
+    <div id="pv-${a.id}" hidden><div class="mut" style="margin:6px 0 4px">${a.client_text ? "Exactly what your client receives on WhatsApp:" : "Preview (passenger names not yet available):"}</div><pre class="msg">${h(a.client_text || a.text)}</pre></div></div>`;
 }
 async function sendAlert(id, m) {
   const inp = $("#mob-" + id), mobile = (inp?.value || "").trim();
@@ -274,7 +274,7 @@ async function sendAlert(id, m) {
   const a = (CACHE.alerts || []).find((x) => x.id === id);
   if (!confirm(`Send the ${a?.pnr || ""} alert to ${mobile} on WhatsApp?`)) return;
   const btn = document.querySelector(`[data-send="${id}"]`); btn.disabled = true; btn.textContent = "Sending…";
-  try { await post(`/api/alerts/${id}/send`, { mobile }); toast("✓ Sent — delivery status will update here"); FILTER = "sent"; vAlerts(m); }
+  try { await post(`/api/alerts/${id}/send`, { mobile }); toast("✓ Sent — it is now under “Sent”. Delivery ticks update there."); vAlerts(m); }
   catch (e) { toast("Not sent: " + e.message); btn.disabled = false; btn.textContent = "Send on WhatsApp"; }
 }
 

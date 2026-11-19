@@ -139,8 +139,12 @@ function clientLegs(p) {
 }
 function clientName(p) {
   const pax = (p.passengers || []).map(titleName);
-  const n = pax.length - 1;
-  return pax.length ? pax[0] + (n > 0 ? ` and ${n} other${n === 1 ? "" : "s"}` : "") : "Customer";
+  if (!pax.length) return "Customer";
+  if (pax.length === 1) return pax[0];
+  // Every passenger by name (WhatsApp template text: one line, kept under ~900 characters)
+  let list = pax.slice(0, -1).join(", ") + " and " + pax[pax.length - 1];
+  if (list.length > 900) { let k = pax.length; while (k > 1 && (pax.slice(0, k).join(", ") + ` and ${pax.length - k} others`).length > 900) k--; list = pax.slice(0, k).join(", ") + ` and ${pax.length - k} others`; }
+  return list;
 }
 // v2 templates: each changed flight on its own lines, "Reply STOP" footer. 1 or 2 flights; more → v1.
 //   flight_change_1leg / flight_change_2leg / flight_cancel_1leg / flight_cancel_2leg
@@ -160,7 +164,7 @@ function templateV2For(p, agency) {
     params.push(cancelled ? (legShort(s.new) || "Not offered by the airline - full refund applicable") : (legShort(s.new) || "Please contact us"));
   }
   params.push(agency?.name, agency?.owner_phone || agency?.whatsapp);
-  return { name: `${cancelled ? "flight_cancel" : "flight_change"}_${legs.length}leg`, params: params.map((x) => clean(x)) };
+  return { name: `${cancelled ? "flight_cancel" : "flight_change"}_${legs.length}leg`, params: params.map((x, i) => clean(x, i === 0 ? 900 : 300)) };
 }
 function templateFor(p, agency) {
   const pax = (p.passengers || []).map(titleName);
@@ -172,7 +176,7 @@ function templateFor(p, agency) {
   const params = [who, p.pnr, airlineName(p.airline || ""), cancelled ? oldTxt : (oldTxt || "As per your ticket"), cancelled ? (newTxt || "Not offered by the airline - full refund applicable") : newTxt,
     agency?.name, agency?.owner_phone || agency?.whatsapp];
   return { name: cancelled ? (process.env.WA_TPL_CANCEL || "flight_cancellation") : (process.env.WA_TPL_CHANGE || "flight_schedule_change"),
-           params: params.map((x) => clean(x)) };
+           params: params.map((x, i) => clean(x, i === 0 ? 900 : 300)) };
 }
 async function sendWhatsAppTemplate(toMobile, name, params) {
   const to = normMobile(toMobile);
@@ -208,6 +212,25 @@ async function deliverClientWhatsApp(target, payload, agency, text) {
   }
   const r = await sendWhatsApp(target, text);
   return { ...r, via: "text" };
+}
+
+// Exactly what the client will read on WhatsApp (approved template text with this alert's values)
+function clientPreviewText(payload, agency) {
+  const p = payload || {};
+  if (!p.pnr || !(p.passengers || []).length) return "";
+  const v2 = templateV2For(p, agency);
+  const L = (a, b, c, l1, l2) => `\u2708\uFE0F ${a}\n${l1}: ${b}\n${l2}: ${c}`;
+  const tail = (n, ph) => `\n\nFor any queries, please contact ${n} at ${ph}. Thank you.`;
+  if (v2) {
+    const q = v2.params, cancel = v2.name.startsWith("flight_cancel");
+    const head = `Dear ${q[0]},\n\nThe airline has ${cancel ? (v2.name.endsWith("2leg") ? "cancelled flights in" : "cancelled a flight in") : "changed the schedule of"} your booking PNR ${q[1]} with ${q[2]}.\n\n`;
+    const l1 = cancel ? "Cancelled" : "Previous", l2 = cancel ? "Alternative" : "Revised";
+    const legs = v2.name.endsWith("2leg") ? L(q[3], q[4], q[5], l1, l2) + "\n\n" + L(q[6], q[7], q[8], l1, l2) : L(q[3], q[4], q[5], l1, l2);
+    const n = q.length;
+    return head + legs + tail(q[n - 2], q[n - 1]) + "\n\nReply STOP to stop flight alerts\n[ Stop alerts ]";
+  }
+  const t = templateFor(p, agency), q = t.params, cancel = t.name === (process.env.WA_TPL_CANCEL || "flight_cancellation");
+  return `Dear ${q[0]},\n\nThe airline has ${cancel ? "cancelled a flight in" : "changed the schedule of"} your booking PNR ${q[1]} with ${q[2]}.\n\n${cancel ? "Cancelled" : "Previous"}: ${q[3]}\n${cancel ? "Alternative" : "Revised"}: ${q[4]}` + tail(q[5], q[6]);
 }
 
 // ---------- send one alert to the client (dashboard, Telegram approve, auto-send) ----------
@@ -1600,7 +1623,7 @@ let DASH = null, BILLING = null;
 const NEWS = require("./news")({ sb, airlineName, tips: TIPS });
 function startHttp() {
   BILLING = require("./billing")({ sb, adminCard, esc, loadAgencies, onPaid: issueInvoice });
-  DASH = require("./dashboard")({ billing: BILLING, sb, gmail, getAgencies: () => AGENCIES, defaultAgencyId: () => DEFAULT_AGENCY?.id, sendSignupWelcome, loadAgencies, GMAIL_HEALTH, sendAlertToClient, adminCard, esc, waEnabled: () => WA.enabled(), invoices: INVOICES });
+  DASH = require("./dashboard")({ billing: BILLING, sb, gmail, getAgencies: () => AGENCIES, defaultAgencyId: () => DEFAULT_AGENCY?.id, sendSignupWelcome, loadAgencies, GMAIL_HEALTH, sendAlertToClient, adminCard, esc, waEnabled: () => WA.enabled(), invoices: INVOICES, clientPreview: (payload, agencyId) => clientPreviewText(payload, AGENCIES.find((a) => a.id === agencyId)) });
   const port = Number(process.env.PORT || 8080);
   const site = (process.env.SITE_URL || "https://aviolink.in").replace(/\/$/, "");
   http.createServer(async (req, res) => {

@@ -1508,6 +1508,10 @@ function startHttp() {
   const site = (process.env.SITE_URL || "https://aviolink.in").replace(/\/$/, "");
   http.createServer(async (req, res) => {
     const u = new URL(req.url, "http://x");
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     try {
       if (u.pathname === "/privacy" || u.pathname === "/terms") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });

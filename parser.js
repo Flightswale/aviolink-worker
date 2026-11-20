@@ -228,14 +228,14 @@ async function aiFallback(email, opts = {}) {
 // as read but the result loses confidence so it is not auto-sent.
 function verifyFlights(r, email) {
   const text = `${email.subject || ""}\n${email.body || ""}`.toUpperCase();
-  const flat = text.replace(/[\s\-]/g, "");
-  const inMail = new Set((text.match(/\b([A-Z0-9]{2})[\s\-]?(\d{1,4})[A-Z]?\b/g) || []).map((x) => x.replace(/[\s\-]/g, "")));
+  const inMail = new Set((text.match(/(?<![A-Z0-9])([A-Z0-9]{2})[\s\-]?(\d{1,4})[A-Z]?(?![A-Z0-9])/g) || []).map((x) => x.replace(/[\s\-]/g, "")));
   const fix = (leg) => {
     if (!leg || !leg.flight) return;
     const f = String(leg.flight).toUpperCase().replace(/[\s\-]/g, "");
     const m = f.match(/^([A-Z0-9]{2})(\d{1,4})([A-Z]?)$/); if (!m) return;
-    const re = new RegExp(`${m[1]}0*${m[2]}${m[3]}(?!\\d)`);
-    if (re.test(flat)) return; // present as read
+    // Must stand as its own code in the mail text ("AI 251", "AI-251", "AI251"), not inside other words/numbers
+    const re = new RegExp(`(?<![A-Z0-9])${m[1]}[\\s\\-]?0*${m[2]}${m[3]}(?![0-9])`);
+    if (re.test(text)) return; // present as read
     const cands = [...inMail].filter((x) => x.startsWith(m[1]) && x !== f && (x.startsWith(f) || x.slice(2).replace(/^0+/, "").startsWith(m[2])));
     if (cands.length === 1) { console.log(`[verify-flight] ${leg.flight} -> ${cands[0]}`); leg.flight = cands[0].replace(/^([A-Z0-9]{2})/, "$1 "); }
     else { r.confidence = Math.min(r.confidence || 0.5, 0.5); r.flightUnverified = true; }

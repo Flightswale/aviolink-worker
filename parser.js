@@ -223,12 +223,34 @@ async function aiFallback(email, opts = {}) {
   }
 }
 
+// Every flight number the AI returns must appear in the mail. A dropped/added digit (AI 2514 read as AI 251)
+// is corrected when exactly one longer/similar number of the same airline is in the mail; otherwise it is left
+// as read but the result loses confidence so it is not auto-sent.
+function verifyFlights(r, email) {
+  const text = `${email.subject || ""}\n${email.body || ""}`.toUpperCase();
+  const flat = text.replace(/[\s\-]/g, "");
+  const inMail = new Set((text.match(/\b([A-Z0-9]{2})[\s\-]?(\d{1,4})[A-Z]?\b/g) || []).map((x) => x.replace(/[\s\-]/g, "")));
+  const fix = (leg) => {
+    if (!leg || !leg.flight) return;
+    const f = String(leg.flight).toUpperCase().replace(/[\s\-]/g, "");
+    const m = f.match(/^([A-Z0-9]{2})(\d{1,4})([A-Z]?)$/); if (!m) return;
+    const re = new RegExp(`${m[1]}0*${m[2]}${m[3]}(?!\\d)`);
+    if (re.test(flat)) return; // present as read
+    const cands = [...inMail].filter((x) => x.startsWith(m[1]) && x !== f && (x.startsWith(f) || x.slice(2).replace(/^0+/, "").startsWith(m[2])));
+    if (cands.length === 1) { console.log(`[verify-flight] ${leg.flight} -> ${cands[0]}`); leg.flight = cands[0].replace(/^([A-Z0-9]{2})/, "$1 "); }
+    else { r.confidence = Math.min(r.confidence || 0.5, 0.5); r.flightUnverified = true; }
+  };
+  for (const s of r.segments || []) { fix(s); fix(s.old); fix(s.new); }
+}
+
 // ---------- main entry ----------
 // The day the mail was SENT (Date: header) is "today" for reading it: a mail about tomorrow's flight stays a
 // booking even when it is re-read later (self-test, backfill). Falls back to now if the header is missing/odd.
 function mailDay(rawEml) {
-  const m = String(rawEml || "").slice(0, 20000).match(/^Date:\s*(.+)$/mi);
-  const d = m ? new Date(m[1].trim()) : null;
+  const m = String(rawEml || "").slice(0, 60000).match(/^Date:[ \t]*(.+(?:\r?\n[ \t]+.+)*)/mi);
+  const clean = m ? m[1].replace(/\r?\n[ \t]+/g, " ").replace(/\([^)]*\)/g, "").replace(/\s+/g, " ").trim() : "";
+  let d = clean ? new Date(clean) : null;
+  if (d && isNaN(d)) { const x = clean.match(/(\d{1,2}) (\w{3}) (\d{4})/); d = x ? new Date(`${x[1]} ${x[2]} ${x[3]} 12:00 UTC`) : null; }
   if (!d || isNaN(d) || d.getTime() > Date.now() + 86400000 || d.getTime() < Date.now() - 5 * 365 * 86400000) return null;
   return new Date(d.getTime() + 5.5 * 3600000).toISOString().slice(0, 10);
 }
@@ -261,6 +283,7 @@ async function parseEmail(rawEml, opts = {}) {
 
   if (opts.ai !== false) {
     const r = await aiFallback(email, opts);
+    if (r && !r._aiError && !r._notBooking) verifyFlights(r, email);
     // A ticket must name at least one real flight (carrier + number). Payment-initiated / pending mails
     // without one are not bookings — saving them would later look like a "change" when the real ticket arrives.
     if (r && !r._aiError && !r._notBooking && r.kind === "TICKET") {

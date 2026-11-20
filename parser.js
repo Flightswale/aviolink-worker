@@ -247,7 +247,7 @@ function verifyFlights(r, email) {
 // The day the mail was SENT (Date: header) is "today" for reading it: a mail about tomorrow's flight stays a
 // booking even when it is re-read later (self-test, backfill). Falls back to now if the header is missing/odd.
 function mailDay(rawEml) {
-  const m = String(rawEml || "").slice(0, 60000).match(/^Date:[ \t]*(.+(?:\r?\n[ \t]+.+)*)/mi);
+  const m = String(rawEml || "").slice(0, 60000).match(/^Date:[ \t]*(.*(?:\r?\n[ \t]+.+)*)/mi);
   const clean = m ? m[1].replace(/\r?\n[ \t]+/g, " ").replace(/\([^)]*\)/g, "").replace(/\s+/g, " ").trim() : "";
   let d = clean ? new Date(clean) : null;
   if (d && isNaN(d)) { const x = clean.match(/(\d{1,2}) (\w{3}) (\d{4})/); d = x ? new Date(`${x[1]} ${x[2]} ${x[3]} 12:00 UTC`) : null; }

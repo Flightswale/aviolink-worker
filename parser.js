@@ -317,4 +317,4 @@ async function parseEmail(rawEml, opts = {}) {
 }
 
 const helpers = { parseDate, parseTime, normSector, normFlight, extractPaxNames };
-module.exports = { parseEmail, splitEmail, helpers, scoreResult, aiFallback, decodeMimeWords, stripHtml };
+module.exports = { parseEmail, splitEmail, helpers, scoreResult, aiFallback, decodeMimeWords, stripHtml, mailDay };

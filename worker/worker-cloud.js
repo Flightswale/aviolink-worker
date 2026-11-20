@@ -469,6 +469,22 @@ async function pollTelegram() {
       job.catch((e) => adminCard(`🧪 ${cmd} failed: ${esc(e.message)}`));
       continue;
     }
+    if (txt.startsWith("/why ")) {
+      const q = txt.slice(5).trim();
+      const { data: tm } = await sb.from("test_mails").select("id,subject,raw,expected").ilike("subject", `%${q}%`).limit(1);
+      const t = tm?.[0];
+      if (!t) { await adminCard(`🔎 No test mail with "${esc(q)}" in the subject.`); continue; }
+      const email = splitEmail(t.raw);
+      const marked = await strikeAwareBody(t.raw); if (marked) email.body = marked;
+      const pdfText = await extractPdfTexts(t.raw); if (pdfText) email.body += "\n\n===PDF ATTACHMENT TEXT===\n" + pdfText;
+      const text = `${email.subject}\n${email.body}`.toUpperCase();
+      const toks = [...new Set((text.match(/\b([A-Z0-9]{2})[\s\-]?(\d{1,4})[A-Z]?\b/g) || []).map((x) => x.replace(/\s+/g, " ")))].filter((x) => /^(?:[A-Z]\d|\d[A-Z]|[A-Z]{2})[ -]?\d/.test(x)).slice(0, 25);
+      const dateLine = (String(t.raw).slice(0, 60000).match(/^Date:.*$/mi) || ["(no Date header)"])[0];
+      const got = await readMailForTest(t.raw);
+      const fl = (got.segments || []).map((x) => (x.flight || x.new?.flight || x.old?.flight || "-") + " " + (x.date || x.new?.date || x.old?.date || "")).join(", ");
+      await adminCard(`🔎 <b>${esc(t.subject)}</b>\n${esc(dateLine.slice(0, 120))} → read as of ${esc(String(require("../parser").mailDay(t.raw) || "TODAY (date not readable)"))}\nBody length: ${email.body.length} chars${pdfText ? " (incl. PDF)" : ""}\nFlight-like codes in mail: ${esc(toks.join(" · ") || "none")}\n\nAI reading now: kind ${esc(String(got.kind))} · PNR ${esc(String(got.pnr))} · ${esc(fl || "no flights")} · source ${esc(got.source || "")}${got.flightUnverified ? " · ⚠️ flight not found in mail" : ""}\nExpected: ${esc(JSON.stringify(t.expected).slice(0, 300))}`);
+      continue;
+    }
     if (txt.startsWith("/watemplates3")) {
       const waba = process.env.WA_WABA_ID || "2690954148013574";
       const H = { authorization: `Bearer ${WA.token}`, "content-type": "application/json" };

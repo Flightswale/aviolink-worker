@@ -254,9 +254,15 @@ function mailDay(rawEml) {
   if (!d || isNaN(d) || d.getTime() > Date.now() + 86400000 || d.getTime() < Date.now() - 5 * 365 * 86400000) return null;
   return new Date(d.getTime() + 5.5 * 3600000).toISOString().slice(0, 10);
 }
+// PDF/HTML text often glues a flight number to its time: "AI251417:55" = AI 2514 + 17:55. Split them before
+// anyone reads the text, so neither the templates nor the AI has to guess where the number ends.
+function unglueFlights(t) {
+  return String(t || "").replace(/(?<![A-Z0-9])([A-Z]{2}|[A-Z][0-9]|[0-9][A-Z])([0-9]{1,4})((?:[01][0-9]|2[0-3]):[0-5][0-9])/g, "$1$2 $3");
+}
 async function parseEmail(rawEml, opts = {}) {
   if (!opts.refDate) opts = { ...opts, refDate: mailDay(rawEml) || undefined };
-  const email = opts.email || splitEmail(rawEml); // caller may pass a pre-split email that already carries PDF attachment text
+  const email0 = opts.email || splitEmail(rawEml); // caller may pass a pre-split email that already carries PDF attachment text
+  const email = { ...email0, body: unglueFlights(email0.body) };
   const templates = opts._templates || loadTemplates();
 
   for (const tpl of templates) {

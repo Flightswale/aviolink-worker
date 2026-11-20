@@ -84,21 +84,27 @@ module.exports = function makeSelfTest(ctx) {
         await sb.from("test_mails").update({ raw: t.raw }).eq("id", t.id);
       } catch (e) { console.error("[selftest] refetch", t.subject, e.message); }
     }
-    const bad = []; let aiDown = 0;
+    const bad = [], minors = []; let aiDown = 0;
     for (const t of tests) {
       try {
         let got = await readMail(t.raw);
         if (got.source === "ai-error") { aiDown++; continue; }
         if (!same(essence(got), t.expected)) { got = await readMail(t.raw); } // AI can vary once — confirm
         const g = essence(got);
-        if (!same(g, t.expected)) bad.push({ subject: t.subject, why: diffText(t.expected, g) });
+        if (!same(g, t.expected)) {
+          // "Booking info" vs "not a booking" on a mail with no change (e.g. check-in reminder): never alerts a client either way
+          const kinds = new Set([t.expected?.kind || null, g.kind || null]);
+          const minor = !t.expected?.change && !g.change && kinds.has("TICKET") && kinds.has(null) && kinds.size === 2;
+          (minor ? minors : bad).push({ subject: t.subject, why: diffText(t.expected, g) });
+        }
       } catch (e) { bad.push({ subject: t.subject, why: "error: " + e.message }); }
     }
-    const ok = tests.length - bad.length - aiDown;
+    const ok = tests.length - bad.length - minors.length - aiDown;
     const head = bad.length ? `❌ <b>SELF-TEST: ${bad.length} of ${tests.length} mails read differently</b>` : `✅ <b>SELF-TEST passed</b> — ${ok}/${tests.length} real mails read the same`;
     await adminCard(`${head}${reason ? " (" + esc(reason) + ")" : ""}${aiDown ? `\n⚠️ ${aiDown} skipped — AI not available` : ""}` +
       bad.slice(0, 10).map((b) => `\n\n• ${esc(b.subject)}\n<i>${esc(b.why.slice(0, 300))}</i>`).join("") +
-      (bad.length ? "\n\nIf the new reading is correct, send /acceptall to make it the new expected result." : ""));
+      (bad.length ? "\n\nIf the new reading is correct, send /acceptall to make it the new expected result." : "") +
+      (minors.length ? `\n\nℹ️ ${minors.length} minor (booking info vs not-a-booking, no client effect): ${minors.map((m) => esc(m.subject.slice(0, 60))).join("; ")}` : ""));
     return { total: tests.length, bad };
   }
 

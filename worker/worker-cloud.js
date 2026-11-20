@@ -471,7 +471,8 @@ async function pollTelegram() {
     }
     if (txt.startsWith("/why ")) {
       const q = txt.slice(5).trim();
-      const { data: tm } = await sb.from("test_mails").select("id,subject,raw,expected").ilike("subject", `%${q}%`).limit(1);
+      let { data: tm } = await sb.from("test_mails").select("id,subject,raw,expected").eq("expected->>pnr", q.toUpperCase()).limit(1);
+      if (!tm?.length) ({ data: tm } = await sb.from("test_mails").select("id,subject,raw,expected").ilike("subject", `%${q}%`).limit(1));
       const t = tm?.[0];
       if (!t) { await adminCard(`🔎 No test mail with "${esc(q)}" in the subject.`); continue; }
       const email = splitEmail(t.raw);
@@ -481,8 +482,13 @@ async function pollTelegram() {
       const toks = [...new Set((text.match(/\b([A-Z0-9]{2})[\s\-]?(\d{1,4})[A-Z]?\b/g) || []).map((x) => x.replace(/\s+/g, " ")))].filter((x) => /^(?:[A-Z]\d|\d[A-Z]|[A-Z]{2})[ -]?\d/.test(x)).slice(0, 25);
       const dateLine = (String(t.raw).slice(0, 60000).match(/^Date:.*$/mi) || ["(no Date header)"])[0];
       const got = await readMailForTest(t.raw);
+      // Text around each departure time the AI found — shows how the flight number is really written
+      const plain = `${email.subject}\n${email.body}`.replace(/\s+/g, " ");
+      const snips = [];
+      for (const x of got.segments || []) { const dep = x.dep || x.new?.dep || x.old?.dep; if (!dep) continue;
+        for (const pat of [dep, dep.replace(":", "")]) { const i = plain.indexOf(pat); if (i >= 0) { snips.push(plain.slice(Math.max(0, i - 140), i + 60)); break; } } }
       const fl = (got.segments || []).map((x) => (x.flight || x.new?.flight || x.old?.flight || "-") + " " + (x.date || x.new?.date || x.old?.date || "")).join(", ");
-      await adminCard(`🔎 <b>${esc(t.subject)}</b>\n${esc(dateLine.slice(0, 120))} → read as of ${esc(String(require("../parser").mailDay(t.raw) || "TODAY (date not readable)"))}\nBody length: ${email.body.length} chars${pdfText ? " (incl. PDF)" : ""}\nFlight-like codes in mail: ${esc(toks.join(" · ") || "none")}\n\nAI reading now: kind ${esc(String(got.kind))} · PNR ${esc(String(got.pnr))} · ${esc(fl || "no flights")} · source ${esc(got.source || "")}${got.flightUnverified ? " · ⚠️ flight not found in mail" : ""}\nExpected: ${esc(JSON.stringify(t.expected).slice(0, 300))}`);
+      await adminCard(`🔎 <b>${esc(t.subject)}</b>\n${esc(dateLine.slice(0, 120))} → read as of ${esc(String(require("../parser").mailDay(t.raw) || "TODAY (date not readable)"))}\nBody length: ${email.body.length} chars${pdfText ? " (incl. PDF)" : ""}\nFlight-like codes in mail: ${esc(toks.join(" · ") || "none")}\n\nAI reading now: kind ${esc(String(got.kind))} · PNR ${esc(String(got.pnr))} · ${esc(fl || "no flights")} · source ${esc(got.source || "")}${got.flightUnverified ? " · ⚠️ flight not found in mail" : ""}\nExpected: ${esc(JSON.stringify(t.expected).slice(0, 300))}${snips.length ? "\n\nText near the flight time:\n<code>" + esc(snips.join("\n…\n").slice(0, 700)) + "</code>" : ""}`);
       continue;
     }
     if (txt.startsWith("/watemplates3")) {

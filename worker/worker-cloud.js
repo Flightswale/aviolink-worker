@@ -222,7 +222,9 @@ const V3_TEXT = (() => {
   for (let k = 1; k <= 4; k++) {
     const legsC = Array.from({ length: k }, (_, x) => leg(4 + 3 * x, "Old", "New")).join("\n\n");
     const legsX = Array.from({ length: k }, (_, x) => leg(4 + 3 * x, "Cancelled", "Alternative")).join("\n\n");
-    out[`flight_change_${k}leg`] = { header: "Flight schedule change", body: head("changed your flight booking") + legsC + tail(4 + 3 * k) };
+    // Meta needs enough fixed text per variable: the 4-flight layout gets one extra guidance sentence
+    const note = k >= 4 ? "\n\nPlease check every flight above and plan your airport transfer and connections to match the new timings. If the new timings do not suit you, we will gladly help you with other options." : "";
+    out[`flight_change_${k}leg`] = { header: "Flight schedule change", body: head("changed your flight booking") + legsC + note + tail(4 + 3 * k) };
     out[`flight_cancel_${k}leg`] = { header: "Flight cancellation", body: head(k === 1 ? "cancelled a flight in your booking" : "cancelled flights in your booking") + legsX + tail(4 + 3 * k) };
   }
   return out;

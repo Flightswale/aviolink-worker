@@ -199,7 +199,7 @@ async function aiFallback(email, opts = {}) {
         max_tokens: 2000,
         temperature: 0, // same mail -> same reading, every time
         system: FALLBACK_SYSTEM_PROMPT,
-        messages: [{ role: "user", content: `TODAY: ${new Date().toISOString().slice(0, 10)} (all flight dates are on or after today unless the mail clearly states otherwise; when a date has no year, use the next occurrence from today)\nSUBJECT: ${email.subject}\nFROM: ${email.from}\n\n${(email.body || "").slice(0, 30000)}` }],
+        messages: [{ role: "user", content: `TODAY: ${opts.refDate || new Date().toISOString().slice(0, 10)} (all flight dates are on or after today unless the mail clearly states otherwise; when a date has no year, use the next occurrence from today)\nSUBJECT: ${email.subject}\nFROM: ${email.from}\n\n${(email.body || "").slice(0, 30000)}` }],
       }),
     });
     if (!res.ok) {
@@ -224,7 +224,16 @@ async function aiFallback(email, opts = {}) {
 }
 
 // ---------- main entry ----------
+// The day the mail was SENT (Date: header) is "today" for reading it: a mail about tomorrow's flight stays a
+// booking even when it is re-read later (self-test, backfill). Falls back to now if the header is missing/odd.
+function mailDay(rawEml) {
+  const m = String(rawEml || "").slice(0, 20000).match(/^Date:\s*(.+)$/mi);
+  const d = m ? new Date(m[1].trim()) : null;
+  if (!d || isNaN(d) || d.getTime() > Date.now() + 86400000 || d.getTime() < Date.now() - 5 * 365 * 86400000) return null;
+  return new Date(d.getTime() + 5.5 * 3600000).toISOString().slice(0, 10);
+}
 async function parseEmail(rawEml, opts = {}) {
+  if (!opts.refDate) opts = { ...opts, refDate: mailDay(rawEml) || undefined };
   const email = opts.email || splitEmail(rawEml); // caller may pass a pre-split email that already carries PDF attachment text
   const templates = opts._templates || loadTemplates();
 

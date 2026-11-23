@@ -114,7 +114,7 @@ ${nav}</div></section>`;
   }
   async function pingAll() {
     const { data } = await sb.from("weekly_news").select("week");
-    const site = ["/", "/flightalert.html", "/pricing.html", "/about.html", "/team.html", "/contact.html", "/security.html", "/signup.html", "/news"];
+    const site = ["/", "/flightalert.html", "/pricing.html", "/about.html", "/contact.html", "/security.html", "/signup.html", "/news"];
     return pingIndexNow(site.concat((data || []).map((r) => "/news/" + String(r.week).slice(0, 10))));
   }
 

@@ -550,6 +550,26 @@ async function pollTelegram() {
       await tg("sendMessage", { chat_id: u.message.chat.id, text: `${out.join("\n")}\n\nAll flight templates now:\n${st || "-"}\n\nSend /watemplates again any time to see the status (already-existing ones just show as errors).` });
       continue;
     }
+    if (txt.startsWith("/wapic")) {
+      // Set the WhatsApp profile picture via the Cloud API (Business Suite upload does not stick)
+      const chat = u.message.chat.id; const G = "https://graph.facebook.com/v20.0";
+      try {
+        const dbg = await fetch(`${G}/debug_token?input_token=${WA.token}&access_token=${WA.token}`).then((r) => r.json());
+        const appId = process.env.WA_APP_ID || dbg.data?.app_id;
+        if (!appId) throw new Error("app id not found: " + JSON.stringify(dbg).slice(0, 200));
+        const img = Buffer.from(await (await fetch("https://aviolink.in/assets/aviolink-whatsapp-640.jpg")).arrayBuffer());
+        const ses = await fetch(`${G}/${appId}/uploads?file_length=${img.length}&file_type=image/jpeg&access_token=${WA.token}`, { method: "POST" }).then((r) => r.json());
+        if (!ses.id) throw new Error("upload session: " + JSON.stringify(ses).slice(0, 300));
+        const up = await fetch(`${G}/${ses.id}`, { method: "POST", headers: { authorization: `OAuth ${WA.token}`, file_offset: "0", "content-type": "image/jpeg" }, body: img }).then((r) => r.json());
+        if (!up.h) throw new Error("upload: " + JSON.stringify(up).slice(0, 300));
+        const set = await fetch(`${G}/${WA.phoneId}/whatsapp_business_profile`, { method: "POST", headers: { authorization: `Bearer ${WA.token}`, "content-type": "application/json" },
+          body: JSON.stringify({ messaging_product: "whatsapp", profile_picture_handle: up.h }) }).then((r) => r.json());
+        const now = await fetch(`${G}/${WA.phoneId}/whatsapp_business_profile?fields=profile_picture_url,websites,description,email`, { headers: { authorization: `Bearer ${WA.token}` } }).then((r) => r.json());
+        const pic = now.data?.[0]?.profile_picture_url;
+        await tg("sendMessage", { chat_id: chat, text: set.success ? `✅ WhatsApp profile picture set.${pic ? "\nMeta now shows a picture on the profile." : ""}` : `❌ ${JSON.stringify(set.error || set).slice(0, 400)}` });
+      } catch (e) { await tg("sendMessage", { chat_id: chat, text: `❌ /wapic: ${e.message}` }); }
+      continue;
+    }
     if (txt.startsWith("/wasub")) {
       const waba = process.env.WA_WABA_ID || "2690954148013574";
       const H = { authorization: `Bearer ${WA.token}`, "content-type": "application/json" };
